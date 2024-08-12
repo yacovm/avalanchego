@@ -177,15 +177,19 @@ func (p *earlyTermNoTraversalPoll) Drop(vdr ids.NodeID) {
 //     transitive voting.
 //  4. A single element has achieved an alphaConfidence majority.
 func (p *earlyTermNoTraversalPoll) Finished() bool {
+	finished, _ := p.finishedAndReason()
+	return finished
+}
+func (p *earlyTermNoTraversalPoll) finishedAndReason() (bool, int) {
 	if p.finished {
-		return true
+		return true, 0
 	}
 
 	remaining := p.polled.Len()
 	if remaining == 0 {
 		p.finished = true
 		p.metrics.observeExhausted(time.Since(p.start))
-		return true // Case 1
+		return true, 1 // Case 1
 	}
 
 	received := p.votes.Len()
@@ -193,49 +197,49 @@ func (p *earlyTermNoTraversalPoll) Finished() bool {
 	if maxPossibleVotes < p.alphaPreference {
 		p.finished = true
 		p.metrics.observeEarlyFail(time.Since(p.start))
-		return true // Case 2
+		return true, 2 // Case 2
 	}
 
 	_, freq := p.votes.Mode()
 
 	if len(p.confidences) > 0 {
-		if p.shouldTerminateEarlyErrDriven(freq, maxPossibleVotes) {
+		if fin, reason := p.shouldTerminateEarlyErrDriven(freq, maxPossibleVotes); fin {
 			p.finished = true
-			return true
+			return true, reason
 		}
-		return false
+		return false, 0
 	}
 
 	if freq >= p.alphaPreference && maxPossibleVotes < p.alphaConfidence {
 		p.finished = true
 		p.metrics.observeEarlyAlphaPref(time.Since(p.start))
-		return true // Case 3
+		return true, 3 // Case 3
 	}
 
 	if freq >= p.alphaConfidence {
 		p.finished = true
 		p.metrics.observeEarlyAlphaConf(time.Since(p.start))
-		return true // Case 4
+		return true, 4 // Case 4
 	}
 
-	return false
+	return false, 0
 }
 
-func (p *earlyTermNoTraversalPoll) shouldTerminateEarlyErrDriven(freq, maxPossibleVotes int) bool {
+func (p *earlyTermNoTraversalPoll) shouldTerminateEarlyErrDriven(freq, maxPossibleVotes int) (bool, int) {
 	// Case 4 - First check if we collected the highest alpha confidence
 	if freq >= p.confidences[len(p.confidences)-1] {
 		p.metrics.observeEarlyAlphaConf(time.Since(p.start))
-		return true
+		return true, 4
 	}
 
 	if freq < p.alphaPreference {
-		return false
+		return false, 0
 	}
 
 	// Case 3a: We have collected the maximum votes, but it is below any of the confidence thresholds.
 	if maxPossibleVotes < p.confidences[0] {
 		p.metrics.observeEarlyAlphaPref(time.Since(p.start))
-		return true
+		return true, 3
 	}
 
 	// Case 3b - We don't have an outstanding query response that improves our confidence,
@@ -244,11 +248,11 @@ func (p *earlyTermNoTraversalPoll) shouldTerminateEarlyErrDriven(freq, maxPossib
 	for i := 0; i < len(p.confidences)-1; i++ {
 		if freq >= p.confidences[i] && maxPossibleVotes < p.confidences[i+1] {
 			p.metrics.observeEarlyAlphaPref(time.Since(p.start))
-			return true
+			return true, 3
 		}
 	}
 
-	return false
+	return false, 0
 }
 
 // Result returns the result of this poll
