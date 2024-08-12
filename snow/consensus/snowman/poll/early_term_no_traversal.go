@@ -173,15 +173,19 @@ func (p *earlyTermNoTraversalPoll) Drop(vdr ids.NodeID) {
 //     transitive voting.
 //  4. A single element has achieved an alphaConfidence majority.
 func (p *earlyTermNoTraversalPoll) Finished() bool {
+	finished, _ := p.finishedAndReason()
+	return finished
+}
+func (p *earlyTermNoTraversalPoll) finishedAndReason() (bool, int) {
 	if p.finished {
-		return true
+		return true, 0
 	}
 
 	remaining := p.polled.Len()
 	if remaining == 0 {
 		p.finished = true
 		p.metrics.observeExhausted(time.Since(p.start))
-		return true // Case 1
+		return true, 1 // Case 1
 	}
 
 	received := p.votes.Len()
@@ -189,23 +193,23 @@ func (p *earlyTermNoTraversalPoll) Finished() bool {
 	if maxPossibleVotes < p.alphaPreference {
 		p.finished = true
 		p.metrics.observeEarlyFail(time.Since(p.start))
-		return true // Case 2
+		return true, 2 // Case 2
 	}
 
 	_, freq := p.votes.Mode()
 	if freq >= p.alphaPreference && maxPossibleVotes < p.alphaConfidence {
 		p.finished = true
 		p.metrics.observeEarlyAlphaPref(time.Since(p.start))
-		return true // Case 3
+		return true, 3 // Case 3
 	}
 
 	if freq >= p.alphaConfidence {
 		p.finished = true
 		p.metrics.observeEarlyAlphaConf(time.Since(p.start))
-		return true // Case 4
+		return true, 4 // Case 4
 	}
 
-	return false
+	return false, 0
 }
 
 // Result returns the result of this poll

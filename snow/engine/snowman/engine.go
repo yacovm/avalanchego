@@ -115,6 +115,9 @@ func New(config Config) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	factory = &poll.AnalyzerFactory{Factory: factory, Name: fmt.Sprintf("%x, %s", config.Ctx.ChainID, config.Ctx.PrimaryAlias)}
+
 	polls, err := poll.NewSet(
 		factory,
 		config.Ctx.Log,
