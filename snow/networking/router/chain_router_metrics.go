@@ -14,10 +14,20 @@ type routerMetrics struct {
 	outstandingRequests   prometheus.Gauge
 	longestRunningRequest prometheus.Gauge
 	droppedRequests       prometheus.Counter
+	timeouts              prometheus.Counter
+	issuedRequests        prometheus.Counter
 }
 
 func newRouterMetrics(registerer prometheus.Registerer) (*routerMetrics, error) {
 	rMetrics := &routerMetrics{}
+	rMetrics.issuedRequests = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "issued_requests",
+		Help: "Number of requests we have sent",
+	})
+	rMetrics.timeouts = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "request_timeouts",
+		Help: "Number of times a timeout occurred on a query",
+	})
 	rMetrics.outstandingRequests = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "outstanding",
@@ -41,6 +51,8 @@ func newRouterMetrics(registerer prometheus.Registerer) (*routerMetrics, error) 
 		registerer.Register(rMetrics.outstandingRequests),
 		registerer.Register(rMetrics.longestRunningRequest),
 		registerer.Register(rMetrics.droppedRequests),
+		registerer.Register(rMetrics.timeouts),
+		registerer.Register(rMetrics.issuedRequests),
 	)
 	return rMetrics, err
 }

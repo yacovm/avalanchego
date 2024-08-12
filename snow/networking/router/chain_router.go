@@ -207,9 +207,12 @@ func (cr *ChainRouter) RegisterRequest(
 		shouldMeasureLatency,
 		uniqueRequestID,
 		func() {
+			cr.metrics.timeouts.Inc()
 			cr.HandleInbound(ctx, timeoutMsg)
 		},
 	)
+
+	cr.metrics.issuedRequests.Inc()
 }
 
 func (cr *ChainRouter) HandleInbound(ctx context.Context, msg message.InboundMessage) {
