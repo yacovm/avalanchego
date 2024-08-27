@@ -43,6 +43,7 @@ type earlyTermNoTraversalMetrics struct {
 	durEarlyFailPolls      prometheus.Gauge
 	durEarlyAlphaPrefPolls prometheus.Gauge
 	durEarlyAlphaConfPolls prometheus.Gauge
+	durPrefToConfidence    prometheus.Gauge
 
 	countExhaustedPolls      prometheus.Counter
 	countEarlyFailPolls      prometheus.Counter
@@ -66,7 +67,16 @@ func newEarlyTermNoTraversalMetrics(reg prometheus.Registerer) (*earlyTermNoTrav
 		return nil, fmt.Errorf("%w: %w", errPollDurationVectorMetrics, err)
 	}
 
+	prefToConf := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "pref_to_confidence",
+		Help: "time (in ns) from reaching preference to reaching confidence",
+	})
+	if err := reg.Register(prefToConf); err != nil {
+		return nil, fmt.Errorf("%w: %w", errors.New("failed to register pref_to_confidence metrics"), err)
+	}
+
 	return &earlyTermNoTraversalMetrics{
+		durPrefToConfidence:      prefToConf,
 		durExhaustedPolls:        durPollsVec.With(exhaustedLabel),
 		durEarlyFailPolls:        durPollsVec.With(earlyFailLabel),
 		durEarlyAlphaPrefPolls:   durPollsVec.With(earlyAlphaPrefLabel),
@@ -138,14 +148,15 @@ func (f *earlyTermNoTraversalFactory) New(vdrs bag.Bag[ids.NodeID]) Poll {
 // the result of the poll. However, does not terminate tightly with this bound.
 // It terminates as quickly as it can without performing any DAG traversals.
 type earlyTermNoTraversalPoll struct {
+	reachedPref     bool
+	reachedPrefTime time.Time
 	votes           bag.Bag[ids.ID]
 	polled          bag.Bag[ids.NodeID]
 	alphaPreference int
 	alphaConfidence int
-
-	metrics  *earlyTermNoTraversalMetrics
-	start    time.Time
-	finished bool
+	metrics         *earlyTermNoTraversalMetrics
+	start           time.Time
+	finished        bool
 }
 
 // Vote registers a response for this poll
@@ -193,6 +204,13 @@ func (p *earlyTermNoTraversalPoll) Finished() bool {
 	}
 
 	_, freq := p.votes.Mode()
+
+	// If we reached preference for the first time
+	if freq >= p.alphaPreference && !p.reachedPref {
+		p.reachedPref = true
+		p.reachedPrefTime = time.Now()
+	}
+
 	if freq >= p.alphaPreference && maxPossibleVotes < p.alphaConfidence {
 		p.finished = true
 		p.metrics.observeEarlyAlphaPref(time.Since(p.start))
@@ -202,6 +220,7 @@ func (p *earlyTermNoTraversalPoll) Finished() bool {
 	if freq >= p.alphaConfidence {
 		p.finished = true
 		p.metrics.observeEarlyAlphaConf(time.Since(p.start))
+		p.metrics.durPrefToConfidence.Set(float64(time.Since(p.reachedPrefTime).Nanoseconds()))
 		return true // Case 4
 	}
 
