@@ -31,7 +31,10 @@ import (
 	"github.com/ava-labs/avalanchego/utils/units"
 )
 
-const nonVerifiedCacheSize = 64 * units.MiB
+const (
+	nonVerifiedCacheSize = 64 * units.MiB
+	errInsufficientStake = "insufficient connected stake"
+)
 
 var _ common.Engine = (*Engine)(nil)
 
@@ -190,12 +193,19 @@ func (e *Engine) Gossip(ctx context.Context) error {
 		return nil
 	}
 
+	blkID := e.Consensus.Preference()
+
+	if e.abortDueToInsufficientConnectedStake(blkID) {
+		return nil
+	}
+
 	e.requestID++
+
 	e.Sender.SendPullQuery(
 		ctx,
 		set.Of(vdrID),
 		e.requestID,
-		e.Consensus.Preference(),
+		blkID,
 		nextHeightToAccept,
 	)
 	return nil
@@ -875,9 +885,13 @@ func (e *Engine) sendQuery(
 		zap.Stringer("validators", e.Validators),
 	)
 
+	if e.abortDueToInsufficientConnectedStake(blkID) {
+		return
+	}
+
 	vdrIDs, err := e.Validators.Sample(e.Ctx.SubnetID, e.Params.K)
 	if err != nil {
-		e.Ctx.Log.Warn("dropped query for block",
+		e.Ctx.Log.Debug("dropped query for block",
 			zap.String("reason", "insufficient number of validators"),
 			zap.Stringer("blkID", blkID),
 			zap.Int("size", e.Params.K),
@@ -914,6 +928,21 @@ func (e *Engine) sendQuery(
 	} else {
 		e.Sender.SendPullQuery(ctx, vdrSet, e.requestID, blkID, nextHeightToAccept)
 	}
+}
+
+func (e *Engine) abortDueToInsufficientConnectedStake(blkID ids.ID) bool {
+	stakeConnectedRatio := e.Config.ConnectedValidators.ConnectedPercent()
+	minConnectedStakeToQuery := float64(e.Params.AlphaConfidence) / float64(e.Params.K)
+
+	if stakeConnectedRatio < minConnectedStakeToQuery {
+		e.Ctx.Log.Warn("dropped query for block",
+			zap.String("reason", errInsufficientStake),
+			zap.Stringer("blkID", blkID),
+			zap.Float64("ratio", stakeConnectedRatio),
+		)
+		return true
+	}
+	return false
 }
 
 // issue [blk] to consensus
