@@ -17,23 +17,28 @@ var _ Accepted = (*accepted)(nil)
 type Accepted interface {
 	validators.SetCallbackListener
 
-	// SetLastAccepted updates the latest accepted block for [nodeID] to
-	// [blockID]. If [nodeID] is not currently a validator, this is a noop.
-	SetLastAccepted(nodeID ids.NodeID, blockID ids.ID)
+	// SetLastAccepted updates the latest accepted block and height for [nodeID] to
+	// [blockID], [height]. If [nodeID] is not currently a validator, this is a noop.
+	SetLastAccepted(nodeID ids.NodeID, blockID ids.ID, height uint64)
 	// LastAccepted returns the latest known accepted block of [nodeID]. If
 	// [nodeID]'s last accepted block was never unknown, false will be returned.
-	LastAccepted(nodeID ids.NodeID) (ids.ID, bool)
+	LastAccepted(nodeID ids.NodeID) (ids.ID, uint64, bool)
+}
+
+type nodeStats struct {
+	blockID ids.ID
+	height  uint64
 }
 
 type accepted struct {
 	lock       sync.RWMutex
 	validators set.Set[ids.NodeID]
-	frontier   map[ids.NodeID]ids.ID
+	frontier   map[ids.NodeID]nodeStats
 }
 
 func NewAccepted() Accepted {
 	return &accepted{
-		frontier: make(map[ids.NodeID]ids.ID),
+		frontier: make(map[ids.NodeID]nodeStats),
 	}
 }
 
@@ -54,19 +59,19 @@ func (a *accepted) OnValidatorRemoved(nodeID ids.NodeID, _ uint64) {
 
 func (*accepted) OnValidatorWeightChanged(_ ids.NodeID, _, _ uint64) {}
 
-func (a *accepted) SetLastAccepted(nodeID ids.NodeID, frontier ids.ID) {
+func (a *accepted) SetLastAccepted(nodeID ids.NodeID, frontier ids.ID, height uint64) {
 	a.lock.Lock()
 	defer a.lock.Unlock()
 
 	if a.validators.Contains(nodeID) {
-		a.frontier[nodeID] = frontier
+		a.frontier[nodeID] = nodeStats{blockID: frontier, height: height}
 	}
 }
 
-func (a *accepted) LastAccepted(nodeID ids.NodeID) (ids.ID, bool) {
+func (a *accepted) LastAccepted(nodeID ids.NodeID) (ids.ID, uint64, bool) {
 	a.lock.RLock()
 	defer a.lock.RUnlock()
 
-	acceptedID, ok := a.frontier[nodeID]
-	return acceptedID, ok
+	stats, ok := a.frontier[nodeID]
+	return stats.blockID, stats.height, ok
 }

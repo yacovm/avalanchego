@@ -6,9 +6,11 @@ package snowman
 import (
 	"context"
 	"fmt"
-
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
+	"golang.org/x/exp/maps"
+	"slices"
+	"time"
 
 	"github.com/ava-labs/avalanchego/cache"
 	"github.com/ava-labs/avalanchego/cache/metercacher"
@@ -87,6 +89,13 @@ type Engine struct {
 	// number of times build block needs to be called once the number of
 	// processing blocks has gone below the optimal number.
 	pendingBuildBlocks int
+
+	// previousStragglerCheckTime is the last time we checked whether
+	// our block height is behind the rest of the network
+	previousStragglerCheckTime time.Time
+
+	// consecutiveBehindPeriod marks the time we're consecutively behind the rest
+	consecutiveBehindPeriod time.Duration
 }
 
 func New(config Config) (*Engine, error) {
@@ -353,8 +362,10 @@ func (e *Engine) PushQuery(ctx context.Context, nodeID ids.NodeID, requestID uin
 	return e.executeDeferredWork(ctx)
 }
 
-func (e *Engine) Chits(ctx context.Context, nodeID ids.NodeID, requestID uint32, preferredID ids.ID, preferredIDAtHeight ids.ID, acceptedID ids.ID) error {
-	e.acceptedFrontiers.SetLastAccepted(nodeID, acceptedID)
+func (e *Engine) Chits(ctx context.Context, nodeID ids.NodeID, requestID uint32, preferredID ids.ID, preferredIDAtHeight ids.ID, acceptedID ids.ID, acceptedHeight uint64) error {
+	e.acceptedFrontiers.SetLastAccepted(nodeID, acceptedID, acceptedHeight)
+
+	defer e.maybeCheckIfWeAreBehindTheRest()
 
 	e.Ctx.Log.Verbo("called Chits for the block",
 		zap.Stringer("nodeID", nodeID),
@@ -411,9 +422,9 @@ func (e *Engine) Chits(ctx context.Context, nodeID ids.NodeID, requestID uint32,
 }
 
 func (e *Engine) QueryFailed(ctx context.Context, nodeID ids.NodeID, requestID uint32) error {
-	lastAccepted, ok := e.acceptedFrontiers.LastAccepted(nodeID)
+	lastAccepted, height, ok := e.acceptedFrontiers.LastAccepted(nodeID)
 	if ok {
-		return e.Chits(ctx, nodeID, requestID, lastAccepted, lastAccepted, lastAccepted)
+		return e.Chits(ctx, nodeID, requestID, lastAccepted, lastAccepted, lastAccepted, height)
 	}
 
 	v := &voter{
@@ -596,7 +607,7 @@ func (e *Engine) sendChits(ctx context.Context, nodeID ids.NodeID, requestID uin
 			)
 			acceptedAtHeight = lastAcceptedID
 		}
-		e.Sender.SendChits(ctx, nodeID, requestID, lastAcceptedID, acceptedAtHeight, lastAcceptedID)
+		e.Sender.SendChits(ctx, nodeID, requestID, lastAcceptedID, acceptedAtHeight, lastAcceptedID, lastAcceptedHeight)
 		return
 	}
 
@@ -641,7 +652,7 @@ func (e *Engine) sendChits(ctx context.Context, nodeID ids.NodeID, requestID uin
 			preferenceAtHeight = preference
 		}
 	}
-	e.Sender.SendChits(ctx, nodeID, requestID, preference, preferenceAtHeight, lastAcceptedID)
+	e.Sender.SendChits(ctx, nodeID, requestID, preference, preferenceAtHeight, lastAcceptedID, lastAcceptedHeight)
 }
 
 // Build blocks if they have been requested and the number of processing blocks
@@ -1179,4 +1190,83 @@ func (e *Engine) isDecided(blk snowman.Block) bool {
 	parentHeight := height - 1
 	parentID := blk.Parent()
 	return parentHeight == lastAcceptedHeight && parentID != lastAcceptedID // the parent was rejected
+}
+
+func (e *Engine) maybeCheckIfWeAreBehindTheRest() {
+	now := time.Now()
+	if e.previousStragglerCheckTime.IsZero() {
+		e.previousStragglerCheckTime = now
+		return
+	}
+
+	if e.previousStragglerCheckTime.Add(time.Second).After(now) {
+		return
+	}
+
+	defer func() {
+		e.previousStragglerCheckTime = now
+	}()
+
+	if e.amIBehind() {
+		timeSinceLastCheck := now.Sub(e.previousStragglerCheckTime)
+	} else {
+		e.consecutiveBehindPeriod = 0
+	}
+}
+
+func (e *Engine) amIBehind() bool {
+	minConfRatio := float64(e.Config.Params.AlphaConfidence) / float64(e.Config.Params.K)
+
+	if e.Config.ConnectedValidators == nil {
+		e.Ctx.Log.Error("connected validators are unknown")
+		return false
+	}
+
+	if e.Config.ConnectedValidators.ConnectedPercent() < minConfRatio {
+		// We don't know for sure whether we're behind or not.
+		// Even if we're behind, it's pointless to act before we have established
+		//  connectivity with enough validators.
+		return false
+	}
+
+	height2weight, totalWeight := observedHeightsToWeights(e.Config.ConnectedValidators.ConnectedValidators(), func(validatorID ids.NodeID) (uint64, bool) {
+		_, height, ok := e.acceptedFrontiers.LastAccepted(validatorID)
+		return height, ok
+	})
+
+	currentHeight := heightThatMostWeightIsAbove(height2weight, totalWeight)
+}
+
+func observedHeightsToWeights(vdrs set.Set[ids.NodeWeight], heightByNodeID func(id ids.NodeID) (uint64, bool)) (map[uint64]uint64, uint64) {
+	height2weight := make(map[uint64]uint64)
+	var totalWeight uint64
+
+	for _, vdr := range vdrs.List() {
+		height, ok := heightByNodeID(vdr.Node)
+		if !ok {
+			continue
+		}
+
+		totalWeight += vdr.Weight
+		height2weight[height] += vdr.Weight
+	}
+	return height2weight, totalWeight
+}
+
+func heightThatMostWeightIsAbove(height2weight map[uint64]uint64, totalWeight uint64) uint64 {
+	heights := maps.Keys(height2weight)
+	slices.Sort(heights)
+
+	var cumulativeWeight uint64
+	var currentHeight uint64
+	// Iterate backwards over heights and find the height such that
+	// 80% of the total weight is located among higher heights
+	for i := len(heights) - 1; i >= 0; i-- {
+		currentHeight = heights[i]
+		cumulativeWeight += height2weight[heights[i]]
+		if cumulativeWeight >= uint64(float64(totalWeight)*0.8) {
+			break
+		}
+	}
+	return currentHeight
 }

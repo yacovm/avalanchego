@@ -334,6 +334,7 @@ type ChitsHandler interface {
 		preferredID ids.ID,
 		preferredIDAtHeight ids.ID,
 		acceptedID ids.ID,
+		acceptedHeight uint64,
 	) error
 
 	// Notify this engine that a Query request it issued has failed.

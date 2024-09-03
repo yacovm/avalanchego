@@ -61,7 +61,7 @@ func (h *handler) networkHealthCheck() (interface{}, error) {
 	return details, err
 }
 
-func (h *handler) getDisconnectedValidators() set.Set[ids.NodeID] {
+func (h *handler) getDisconnectedValidators() set.Set[ids.NodeWeight] {
 	vdrs := h.peerTracker.GetValidators()
 	connectedVdrs := h.peerTracker.ConnectedValidators()
 	// vdrs - connectedVdrs is equal to the disconnectedVdrs
