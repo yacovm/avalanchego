@@ -6,19 +6,24 @@ package snowball
 import "github.com/ava-labs/avalanchego/ids"
 
 var (
-	SnowballFactory  Factory = snowballFactory{}
-	SnowflakeFactory Factory = snowflakeFactory{}
+	SnowballFactoryInstance Factory = SnowballFactory{}
+	SnowflakeFactory        Factory = snowflakeFactory{}
 )
 
-type snowballFactory struct{}
+type SnowballFactory struct {
+	Interceptor func(Unary) Unary
+}
 
-func (snowballFactory) NewNnary(params Parameters, choice ids.ID) Nnary {
+func (SnowballFactory) NewNnary(params Parameters, choice ids.ID) Nnary {
 	sb := newNnarySnowball(params.AlphaPreference, newSingleTerminationCondition(params.AlphaConfidence, params.Beta), choice)
 	return &sb
 }
 
-func (snowballFactory) NewUnary(params Parameters) Unary {
+func (s SnowballFactory) NewUnary(params Parameters) Unary {
 	sb := newUnarySnowball(params.AlphaPreference, newSingleTerminationCondition(params.AlphaConfidence, params.Beta))
+	if s.Interceptor != nil {
+		return s.Interceptor(&sb)
+	}
 	return &sb
 }
 

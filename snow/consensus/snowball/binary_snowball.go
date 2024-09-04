@@ -57,3 +57,19 @@ func (sb *binarySnowball) String() string {
 		sb.preferenceStrength[1],
 		&sb.binarySnowflake)
 }
+
+type InterceptorBinarySnowBall struct {
+	Report func(int)
+	Binary
+}
+
+func (isb *InterceptorBinarySnowBall) RecordPoll(count, choice int) {
+	ps := isb.Binary.(*binarySnowball).preferenceStrength
+	if ps[0] > ps[1] {
+		isb.Report(ps[0])
+	} else {
+		isb.Report(ps[1])
+	}
+
+	isb.Binary.RecordPoll(count, choice)
+}
