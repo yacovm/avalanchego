@@ -58,3 +58,19 @@ func (sb *unarySnowball) String() string {
 		sb.preferenceStrength,
 		&sb.unarySnowflake)
 }
+
+type InterceptorUnarySnowBall struct {
+	Report func(int)
+	Unary
+}
+
+func (isb *InterceptorUnarySnowBall) RecordPoll(count int) {
+	isb.Report(isb.Unary.(*unarySnowball).preferenceStrength)
+	isb.Unary.RecordPoll(count)
+}
+
+// Returns a new binary snowball instance with the original choice.
+func (isb *InterceptorUnarySnowBall) Extend(originalPreference int) Binary {
+	binary := isb.Unary.Extend(originalPreference)
+	return &InterceptorBinarySnowBall{Binary: binary, Report: isb.Report}
+}

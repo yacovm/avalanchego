@@ -47,6 +47,8 @@ type metrics struct {
 	latAccepted          metric.Averager
 	buildLatencyAccepted prometheus.Gauge
 
+	preferenceStrength prometheus.Gauge
+
 	blockSizeRejectedSum prometheus.Gauge
 	// pollsRejected tracks the number of polls that a block was in processing
 	// for before being rejected
@@ -113,6 +115,11 @@ func newMetrics(
 			Help: "time (in ns) from the timestamp of a block to the time it was accepted",
 		}),
 
+		preferenceStrength: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "unary_pref_strength",
+			Help: "the preference strength of unary snowball",
+		}),
+
 		blockSizeRejectedSum: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "blks_rejected_container_size_sum",
 			Help: "cumulative size of all rejected blocks",
@@ -151,6 +158,7 @@ func newMetrics(
 		reg.Register(m.lastAcceptedTimestamp),
 		reg.Register(m.numProcessing),
 		reg.Register(m.blockSizeAcceptedSum),
+		reg.Register(m.preferenceStrength),
 		reg.Register(m.buildLatencyAccepted),
 		reg.Register(m.blockSizeRejectedSum),
 		reg.Register(m.numSuccessfulPolls),
