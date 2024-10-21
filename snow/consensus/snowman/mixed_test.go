@@ -33,15 +33,15 @@ func TestConvergenceSnowFlakeSnowBall(t *testing.T) {
 		t.Run(fmt.Sprintf("%d nodes", numNodes), func(t *testing.T) {
 			n := NewNetwork(params, 10, prng.NewMT19937())
 			for i := 0; i < numNodes; i++ {
-				var sm Consensus
+				var sbFactory snowball.Factory
 				if i%2 == 0 {
-					factory := TopologicalFactory{factory: snowball.SnowflakeFactory}
-					sm = factory.New()
+					sbFactory = snowball.SnowflakeFactory
 				} else {
-					factory := TopologicalFactory{factory: snowball.SnowballFactory}
-					sm = factory.New()
+					sbFactory = snowball.SnowballFactory
 				}
 
+				factory := TopologicalFactory{factory: sbFactory}
+				sm := factory.New()
 				require.NoError(n.AddNode(t, sm))
 			}
 
