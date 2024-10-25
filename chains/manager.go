@@ -576,6 +576,7 @@ func (m *manager) buildChain(chainParams ChainParameters, sb subnets.Subnet) (*c
 			vm,
 			chainFxs,
 			sb,
+			vmFactory,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("error while creating new snowman vm %w", err)
@@ -1060,6 +1061,7 @@ func (m *manager) createSnowmanChain(
 	vm block.ChainVM,
 	fxs []*common.Fx,
 	sb subnets.Subnet,
+	vmFactory vms.Factory,
 ) (*chain, error) {
 	ctx.Lock.Lock()
 	defer ctx.Lock.Unlock()
@@ -1210,6 +1212,44 @@ func (m *manager) createSnowmanChain(
 	// The channel through which a VM may send messages to the consensus engine
 	// VM uses this channel to notify engine that a block is ready to be made
 	msgChan := make(chan common.Message, defaultChannelSize)
+
+	if err := vm.Initialize(
+		context.TODO(),
+		ctx.Context,
+		vmDB,
+		genesisData,
+		chainConfig.Upgrade,
+		chainConfig.Config,
+		msgChan,
+		fxs,
+		messageSender,
+	); err != nil {
+		return nil, err
+	}
+
+	vm.Shutdown(context.Background())
+	m.Metrics.Deregister(proposervmNamespace)
+
+	vmInstance, err := vmFactory.New(ctx.Log)
+	if err != nil {
+		return nil, err
+	}
+
+	vm = vmInstance.(block.ChainVM)
+
+	proposerVM = proposervm.New(
+		vm,
+		proposervm.Config{
+			Upgrades:            m.Upgrades,
+			MinBlkDelay:         minBlockDelay,
+			NumHistoricalBlocks: numHistoricalBlocks,
+			StakingLeafSigner:   m.StakingTLSSigner,
+			StakingCertLeaf:     m.StakingTLSCert,
+			Registerer:          proposervmReg,
+		},
+	)
+
+	vm = proposerVM
 
 	if err := vm.Initialize(
 		context.TODO(),
