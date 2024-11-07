@@ -114,15 +114,12 @@ func (ss *stateSyncer) Start(ctx context.Context, startReqID uint32) error {
 
 	ss.Ctx.State.Set(snow.EngineState{
 		Type:  p2p.EngineType_ENGINE_TYPE_SNOWMAN,
-		State: snow.StateSyncing,
+		State: snow.Bootstrapping,
 	})
-	if err := ss.VM.SetState(ctx, snow.StateSyncing); err != nil {
+	if err := ss.VM.SetState(ctx, snow.Bootstrapping); err != nil {
 		return fmt.Errorf("failed to notify VM that state syncing has started: %w", err)
 	}
-
-	ss.requestID = startReqID
-
-	return ss.tryStartSyncing(ctx)
+	return ss.onDoneStateSyncing(ctx, startReqID)
 }
 
 func (ss *stateSyncer) Connected(ctx context.Context, nodeID ids.NodeID, nodeVersion *version.Application) error {

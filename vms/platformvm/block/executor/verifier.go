@@ -480,15 +480,13 @@ func (v *verifier) processStandardTxs(txs []*txs.Tx, feeCalculator fee.Calculato
 ) {
 
 	complexity, err := TxComplexity(txs)
-	if err != nil {
-		return nil, nil, nil, err
+	if err == nil {
+		t1 := time.Now()
+		defer func() {
+			elapsed := time.Since(t1)
+			fmt.Println(">>>>", complexity.Read, complexity.Write, complexity.BLS, complexity.ECDSA, elapsed)
+		}()
 	}
-
-	t1 := time.Now()
-	defer func() {
-		elapsed := time.Since(t1)
-		fmt.Println(">>>>", complexity.Read, complexity.Write, complexity.BLS, complexity.ECDSA, elapsed)
-	}()
 
 	// Complexity is limited first to avoid processing too large of a block.
 	timestamp := diff.GetTimestamp()
