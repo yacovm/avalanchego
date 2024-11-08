@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 
@@ -53,6 +55,25 @@ var (
 	errMutatedSig              = errors.New("signature was mutated from its original format")
 )
 
+var (
+	sigCount   int64
+	sigElapsed int64
+)
+
+func init() {
+	go func() {
+		for {
+			time.Sleep(time.Minute)
+			count := atomic.LoadInt64(&sigCount)
+			if count == 0 {
+				continue
+			}
+			duration := time.Duration(atomic.LoadInt64(&sigElapsed) / count)
+			fmt.Println(">>>> secp256k1 verification took on average", duration)
+		}
+	}()
+}
+
 func NewPrivateKey() (*PrivateKey, error) {
 	k, err := secp256k1.GeneratePrivateKey()
 	return &PrivateKey{sk: k}, err
@@ -85,6 +106,12 @@ func RecoverPublicKey(msg, sig []byte) (*PublicKey, error) {
 }
 
 func RecoverPublicKeyFromHash(hash, sig []byte) (*PublicKey, error) {
+	atomic.AddInt64(&sigCount, 1)
+	t1 := time.Now()
+	defer func() {
+		elapsed := int64(time.Since(t1))
+		atomic.AddInt64(&sigElapsed, elapsed)
+	}()
 	if err := verifySECP256K1RSignatureFormat(sig); err != nil {
 		return nil, err
 	}

@@ -6,8 +6,6 @@ package executor
 import (
 	"errors"
 	"fmt"
-	"time"
-
 	"github.com/ava-labs/avalanchego/chains/atomic"
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/utils/math"
@@ -478,16 +476,6 @@ func (v *verifier) processStandardTxs(txs []*txs.Tx, feeCalculator fee.Calculato
 	func(),
 	error,
 ) {
-
-	complexity, err := TxComplexity(txs)
-	if err == nil {
-		t1 := time.Now()
-		defer func() {
-			elapsed := time.Since(t1)
-			fmt.Println(">>>>", complexity.Read, complexity.Write, complexity.BLS, complexity.ECDSA, elapsed)
-		}()
-	}
-
 	// Complexity is limited first to avoid processing too large of a block.
 	timestamp := diff.GetTimestamp()
 	isEtna := v.txExecutorBackend.Config.UpgradeConfig.IsEtnaActivated(timestamp)

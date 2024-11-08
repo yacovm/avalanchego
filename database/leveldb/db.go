@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +26,90 @@ import (
 	"github.com/ava-labs/avalanchego/database"
 	"github.com/ava-labs/avalanchego/utils"
 	"github.com/ava-labs/avalanchego/utils/logging"
+)
+
+var (
+	BlockIDPrefix                 = []byte("blockID")
+	BlockPrefix                   = []byte("block")
+	ValidatorsPrefix              = []byte("validators")
+	CurrentPrefix                 = []byte("current")
+	PendingPrefix                 = []byte("pending")
+	ValidatorPrefix               = []byte("validator")
+	DelegatorPrefix               = []byte("delegator")
+	SubnetValidatorPrefix         = []byte("subnetValidator")
+	SubnetDelegatorPrefix         = []byte("subnetDelegator")
+	ValidatorWeightDiffsPrefix    = []byte("flatValidatorDiffs")
+	ValidatorPublicKeyDiffsPrefix = []byte("flatPublicKeyDiffs")
+	TxPrefix                      = []byte("tx")
+	RewardUTXOsPrefix             = []byte("rewardUTXOs")
+	UTXOPrefix                    = []byte("utxo")
+	SubnetPrefix                  = []byte("subnet")
+	SubnetOwnerPrefix             = []byte("subnetOwner")
+	SubnetConversionPrefix        = []byte("subnetConversion")
+	TransformedSubnetPrefix       = []byte("transformedSubnet")
+	SupplyPrefix                  = []byte("supply")
+	ChainPrefix                   = []byte("chain")
+	ExpiryReplayProtectionPrefix  = []byte("expiryReplayProtection")
+	SubnetOnlyValidatorsPrefix    = []byte("subnetOnlyValidators")
+	WeightsPrefix                 = []byte("weights")
+	SubnetIDNodeIDPrefix          = []byte("subnetIDNodeID")
+	ActivePrefix                  = []byte("active")
+	InactivePrefix                = []byte("inactive")
+	SingletonPrefix               = []byte("singleton")
+
+	TimestampKey       = []byte("timestamp")
+	FeeStateKey        = []byte("fee state")
+	SoVExcessKey       = []byte("sov excess")
+	AccruedFeesKey     = []byte("accrued fees")
+	CurrentSupplyKey   = []byte("current supply")
+	LastAcceptedKey    = []byte("last accepted")
+	HeightsIndexedKey  = []byte("heights indexed")
+	InitializedKey     = []byte("initialized")
+	BlocksReindexedKey = []byte("blocks reindexed")
+)
+
+var (
+	prefixes = [][]byte{
+		BlockIDPrefix,
+		BlockPrefix,
+		ValidatorsPrefix,
+		CurrentPrefix,
+		PendingPrefix,
+		ValidatorPrefix,
+		DelegatorPrefix,
+		SubnetValidatorPrefix,
+		SubnetDelegatorPrefix,
+		ValidatorPrefix,
+		SubnetPrefix,
+		SubnetOwnerPrefix,
+		SubnetConversionPrefix,
+		TransformedSubnetPrefix,
+		SupplyPrefix,
+		ChainPrefix,
+		ExpiryReplayProtectionPrefix,
+		SubnetOnlyValidatorsPrefix,
+		WeightsPrefix,
+		SubnetIDNodeIDPrefix,
+		ActivePrefix,
+		InactivePrefix,
+		SingletonPrefix,
+		TimestampKey,
+		FeeStateKey,
+		SoVExcessKey,
+		AccruedFeesKey,
+		CurrentSupplyKey,
+		LastAcceptedKey,
+		HeightsIndexedKey,
+		InitializedKey,
+		BlocksReindexedKey,
+		UTXOPrefix,
+		SubnetPrefix,
+		SubnetOwnerPrefix,
+		RewardUTXOsPrefix,
+		TxPrefix,
+		ValidatorWeightDiffsPrefix,
+		ValidatorPublicKeyDiffsPrefix,
+	}
 )
 
 const (
@@ -371,14 +456,33 @@ func (db *Database) HealthCheck(context.Context) (interface{}, error) {
 // batch is a wrapper around a levelDB batch to contain sizes.
 type batch struct {
 	leveldb.Batch
-	db   *Database
-	size int
+	db           *Database
+	size         int
+	nonBlockSize int
+	ops          int
 }
 
 // Put the value into the batch for later writing
 func (b *batch) Put(key, value []byte) error {
 	b.Batch.Put(key, value)
 	b.size += len(key) + len(value) + levelDBByteOverhead
+	if !strings.HasPrefix(string(key), string(BlockPrefix)) {
+		b.ops++
+		b.nonBlockSize += len(key) + len(value) + levelDBByteOverhead
+	}
+
+	var found bool
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(string(key), string(prefix)) {
+			fmt.Print(string(prefix), " ")
+			found = true
+		}
+	}
+
+	if found {
+		fmt.Println()
+	}
+
 	return nil
 }
 
@@ -386,6 +490,10 @@ func (b *batch) Put(key, value []byte) error {
 func (b *batch) Delete(key []byte) error {
 	b.Batch.Delete(key)
 	b.size += len(key) + levelDBByteOverhead
+	if !strings.HasPrefix(string(key), string(BlockPrefix)) {
+		b.ops++
+		b.nonBlockSize += len(key) + levelDBByteOverhead
+	}
 	return nil
 }
 
@@ -396,6 +504,14 @@ func (b *batch) Size() int {
 
 // Write flushes any accumulated data to disk.
 func (b *batch) Write() error {
+	t1 := time.Now()
+	defer func() {
+		if b.ops == 0 {
+			return
+		}
+		elapsed := time.Since(t1)
+		fmt.Println(">>> DB write of", b.size, "bytes and", b.nonBlockSize, "without block, elapsed", elapsed, "on average", elapsed/time.Duration(b.ops), "with", b.ops, "items")
+	}()
 	return updateError(b.db.DB.Write(&b.Batch, nil))
 }
 
@@ -403,6 +519,8 @@ func (b *batch) Write() error {
 func (b *batch) Reset() {
 	b.Batch.Reset()
 	b.size = 0
+	b.ops = 0
+	b.nonBlockSize = 0
 }
 
 // Replay the batch contents.
