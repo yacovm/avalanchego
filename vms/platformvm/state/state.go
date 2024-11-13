@@ -3102,10 +3102,10 @@ func (s *state) ReindexBlocks(lock sync.Locker, log logging.Logger) error {
 		// This block was previously stored using the legacy format, update the
 		// index to remove the usage of stateBlk.
 		if isStateBlk {
-			/*			blkBytes := blk.Bytes()
-						if err := s.blockDB.Put(blkID[:], blkBytes); err != nil {
-							return fmt.Errorf("failed to write block: %w", err)
-						}*/
+			blkBytes := blk.Bytes()
+			if err := s.blockDB.Put(blkID[:], blkBytes); err != nil {
+				return fmt.Errorf("failed to write block: %w", err)
+			}
 
 			numIndicesUpdated++
 		}
