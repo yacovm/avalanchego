@@ -409,7 +409,7 @@ func (b *batch) Write() error {
 		fmt.Println(">>> DB write of", b.size, "bytes and", b.ops, "ops elapsed", elapsed, "on average", elapsed/time.Duration(b.ops))
 	}()
 
-	return updateError(b.db.DB.Write(&b.Batch, nil))
+	return updateError(b.db.DB.Write(&b.Batch, &opt.WriteOptions{Sync: true}))
 }
 
 // Reset resets the batch for reuse.
