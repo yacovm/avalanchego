@@ -373,12 +373,14 @@ type batch struct {
 	leveldb.Batch
 	db   *Database
 	size int
+	ops  int
 }
 
 // Put the value into the batch for later writing
 func (b *batch) Put(key, value []byte) error {
 	b.Batch.Put(key, value)
 	b.size += len(key) + len(value) + levelDBByteOverhead
+	b.ops++
 	return nil
 }
 
@@ -386,6 +388,7 @@ func (b *batch) Put(key, value []byte) error {
 func (b *batch) Delete(key []byte) error {
 	b.Batch.Delete(key)
 	b.size += len(key) + levelDBByteOverhead
+	b.ops++
 	return nil
 }
 
@@ -396,6 +399,16 @@ func (b *batch) Size() int {
 
 // Write flushes any accumulated data to disk.
 func (b *batch) Write() error {
+	t1 := time.Now()
+
+	defer func() {
+		if b.ops == 0 {
+			return
+		}
+		elapsed := time.Since(t1)
+		fmt.Println(">>> DB write of", b.size, "bytes and", b.ops, "ops elapsed", elapsed, "on average", elapsed/time.Duration(b.ops))
+	}()
+
 	return updateError(b.db.DB.Write(&b.Batch, nil))
 }
 
@@ -403,6 +416,7 @@ func (b *batch) Write() error {
 func (b *batch) Reset() {
 	b.Batch.Reset()
 	b.size = 0
+	b.ops = 0
 }
 
 // Replay the batch contents.
