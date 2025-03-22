@@ -5,6 +5,7 @@ package handler
 
 import (
 	"errors"
+	"github.com/ava-labs/avalanchego/utils/metric"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -14,10 +15,27 @@ type metrics struct {
 	messages            *prometheus.CounterVec // op
 	lockingTime         prometheus.Gauge
 	messageHandlingTime *prometheus.GaugeVec // op
+	processingTimePut   metric.Averager
+	processingTimeChits metric.Averager
 }
 
 func newMetrics(reg prometheus.Registerer) (*metrics, error) {
+	processingTimePut, err := metric.NewAverager(
+		"processing_time_put",
+		"time (in ns) of a processing a put message",
+		reg)
+	if err != nil {
+		return nil, err
+	}
+
+	processingTimeChits, err := metric.NewAverager(
+		"processing_time_chits",
+		"time (in ns) of a processing a chits message",
+		reg)
+
 	m := &metrics{
+		processingTimePut:   processingTimePut,
+		processingTimeChits: processingTimeChits,
 		expired: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "expired",

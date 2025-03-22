@@ -451,6 +451,14 @@ func (h *handler) handleSyncMsg(ctx context.Context, msg Message) error {
 		h.metrics.messages.With(labels).Inc()
 		h.metrics.messageHandlingTime.With(labels).Add(float64(handlingTime))
 
+		if msg.Op() == message.PutOp {
+			h.metrics.processingTimePut.Observe(float64(handlingTime))
+		}
+
+		if msg.Op() == message.ChitsOp {
+			h.metrics.processingTimeChits.Observe(float64(handlingTime))
+		}
+
 		msg.OnFinishedHandling()
 		h.ctx.Log.Debug("finished handling sync message",
 			zap.String("messageOp", op),
