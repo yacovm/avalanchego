@@ -24,7 +24,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func CreateSimplexInstance(config *Config) (*simplex.Epoch, *BlockBuilder, *WALInterceptor, error) {
+func CreateSimplexInstance(config *Config, onIndex func(seq, round uint64)) (*simplex.Epoch, *BlockBuilder, *WALInterceptor, error) {
 	signer := BLSSigner{
 		NetworkID: config.Ctx.SubnetID,
 		ChainID:   config.Ctx.ChainID,
@@ -54,7 +54,7 @@ func CreateSimplexInstance(config *Config) (*simplex.Epoch, *BlockBuilder, *WALI
 		WriteAheadLog: epochWAL,
 	}
 
-	storage, err := createStorage(config, err, verifier)
+	storage, err := createStorage(config, err, verifier, onIndex)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -90,8 +90,8 @@ func CreateSimplexInstance(config *Config) (*simplex.Epoch, *BlockBuilder, *WALI
 	return simplex, bb, walInterceptor, nil
 }
 
-func createStorage(config *Config, err error, verifier BLSVerifier) (*Storage, error) {
-	storage, err := NewStorage(config.DB, QCDeserializer(verifier), config.VM, config.GenesisData)
+func createStorage(config *Config, err error, verifier BLSVerifier, onIndex func(seq, round uint64)) (*Storage, error) {
+	storage, err := NewStorage(config.DB, QCDeserializer(verifier), config.VM, config.GenesisData, onIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -130,8 +130,8 @@ type Engine struct {
 	digestCache map[simplex.Digest]ids.ID
 }
 
-func CreateEngine(config *Config) (*Engine, error) {
-	e, bb, wal, err := CreateSimplexInstance(config)
+func CreateEngine(config *Config, onIndex func(seq, round uint64)) (*Engine, error) {
+	e, bb, wal, err := CreateSimplexInstance(config, onIndex)
 	if err != nil {
 		return nil, err
 	}

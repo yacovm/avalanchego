@@ -20,6 +20,7 @@ type Storage struct {
 	vm          block.ChainVM
 	d           QCDeserializer
 	genesisData []byte
+	onIndex     func(seq, round uint64)
 }
 
 func (s *Storage) Height() uint64 {
@@ -84,10 +85,12 @@ func (s *Storage) Index(block simplex.VerifiedBlock, fCert simplex.FinalizationC
 		panic(err)
 	}
 
-	fmt.Println(">>>> block.(*VerifiedBlock):", block.(*VerifiedBlock))
-	fmt.Println(">>>> block.(*VerifiedBlock).accept:", fmt.Sprintf("%p", block.(*VerifiedBlock).accept))
 	if err := block.(*VerifiedBlock).accept(context.Background()); err != nil {
 		panic(err)
+	}
+
+	if s.onIndex != nil {
+		s.onIndex(fCert.Finalization.Seq, fCert.Finalization.Round)
 	}
 }
 
@@ -99,7 +102,7 @@ func encodeHeightAndSeq(seq uint64) ([]byte, []byte) {
 	return heightBuff, seqBuff
 }
 
-func NewStorage(db database.Database, d QCDeserializer, vm block.ChainVM, genesisData []byte) (*Storage, error) {
+func NewStorage(db database.Database, d QCDeserializer, vm block.ChainVM, genesisData []byte, onIndex func(seq, round uint64)) (*Storage, error) {
 	var s Storage
 
 	vdb := versiondb.New(prefixdb.New([]byte("simplex"), db))
@@ -114,6 +117,7 @@ func NewStorage(db database.Database, d QCDeserializer, vm block.ChainVM, genesi
 	s.d = d
 	s.vm = vm
 	s.genesisData = genesisData
+	s.onIndex = onIndex
 
 	return &s, nil
 }

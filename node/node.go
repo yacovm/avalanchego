@@ -13,6 +13,7 @@ import (
 	"io"
 	"io/fs"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -187,6 +188,10 @@ func New(
 		return nil, fmt.Errorf("couldn't initialize API server: %w", err)
 	}
 
+	if err := n.APIServer.AddRoute(&n.sh, "simplex", ""); err != nil {
+		panic(err)
+	}
+
 	if err := n.initMetricsAPI(); err != nil { // Start the Metrics API
 		return nil, fmt.Errorf("couldn't initialize metrics API: %w", err)
 	}
@@ -282,6 +287,8 @@ type Node struct {
 	Log          logging.Logger
 	VMFactoryLog logging.Logger
 	LogFactory   logging.Factory
+
+	sh simplexHandler
 
 	// This node's unique ID used when communicating with other nodes
 	// (in consensus, for example)
@@ -1132,6 +1139,7 @@ func (n *Node) initChainManager(avaxAssetID ids.ID) error {
 
 	n.chainManager, err = chains.New(
 		&chains.ManagerConfig{
+			OnUpdate:                                n.sh.onUpdate,
 			SybilProtectionEnabled:                  n.Config.SybilProtectionEnabled,
 			StakingTLSSigner:                        n.StakingTLSSigner,
 			StakingTLSCert:                          n.StakingTLSCert,
@@ -1746,4 +1754,31 @@ func (n *Node) shutdown() {
 
 func (n *Node) ExitCode() int {
 	return n.shuttingDownExitCode.Get()
+}
+
+type simplexHandler struct {
+	lock  sync.Mutex
+	seq   uint64
+	round uint64
+}
+
+func (s *simplexHandler) onUpdate(seq, round uint64) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	s.seq = seq
+	s.round = round
+}
+
+func (s *simplexHandler) ServeHTTP(writer http.ResponseWriter, _ *http.Request) {
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusOK)
+
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	_, err := writer.Write([]byte(fmt.Sprintf(`{"seq":%d,"round":%d}`, s.seq, s.round)))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to write response: %v", err)
+	}
 }

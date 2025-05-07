@@ -185,6 +185,7 @@ type ChainConfig struct {
 }
 
 type ManagerConfig struct {
+	OnUpdate               func(uint64, uint64)
 	SybilProtectionEnabled bool
 	StakingTLSSigner       crypto.Signer
 	StakingTLSCert         *staking.Certificate
@@ -619,7 +620,7 @@ func (m *manager) buildChain(chainParams ChainParameters, sb subnets.Subnet) (*c
 	)
 }
 
-func (m *manager) createSimplexEngine(ctx *snow.ConsensusContext, vm block.ChainVM, vdrs validators.Manager, getServer common.AllGetsServer, genesisData []byte) (*simplex.Engine, error) {
+func (m *manager) createSimplexEngine(onIndex func(seq, round uint64), ctx *snow.ConsensusContext, vm block.ChainVM, vdrs validators.Manager, getServer common.AllGetsServer, genesisData []byte) (*simplex.Engine, error) {
 	conf := &simplex.Config{
 		GenesisData:        genesisData,
 		GetServer:          getServer,
@@ -632,7 +633,7 @@ func (m *manager) createSimplexEngine(ctx *snow.ConsensusContext, vm block.Chain
 		Validators:         vdrs,
 	}
 
-	return simplex.CreateEngine(conf)
+	return simplex.CreateEngine(conf, onIndex)
 }
 
 func (m *manager) AddRegistrant(r Registrant) {
@@ -1616,7 +1617,7 @@ func (m *manager) createSimplexChain(
 
 	// Create engine, bootstrapper and state-syncer in this order,
 	// to make sure start callbacks are duly initialized
-	simplex, err := m.createSimplexEngine(ctx, vm, vdrs, snowGetHandler, genesisData)
+	simplex, err := m.createSimplexEngine(m.OnUpdate, ctx, vm, vdrs, snowGetHandler, genesisData)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't create simplex instance: %w", err)
 	}

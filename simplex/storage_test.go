@@ -34,7 +34,7 @@ func TestStorage(t *testing.T) {
 
 	memDB := memdb.New()
 	vm := &blocktest.VM{}
-	s, err := NewStorage(memDB, QCDeserializer(v), vm, []byte{1, 2, 3})
+	s, err := NewStorage(memDB, QCDeserializer(v), vm, []byte{1, 2, 3}, nil)
 	require.NoError(t, err)
 
 	msg := "Begin at the beginning, and go on till you come to the end: then stop."
