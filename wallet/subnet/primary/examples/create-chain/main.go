@@ -20,7 +20,7 @@ func main() {
 	key := genesis.EWOQKey
 	uri := primary.LocalAPIURI
 	kc := secp256k1fx.NewKeychain(key)
-	subnetIDStr := "BKBZ6xXTnT86B4L5fp8rvtcmNSpvtNz8En9jG61ywV2uWyeHy"
+	subnetIDStr := "2RXEL93u9Kr7ZnfiUuErPfj5baCLS1j5VWayGznpxDPssfoo5u"
 
 	vmID := constants.SubnetEVMID
 	name := "simplexvm"

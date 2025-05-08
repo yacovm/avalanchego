@@ -23,7 +23,7 @@ func main() {
 	kc := secp256k1fx.NewKeychain(key)
 	subnetIDStr := "BKBZ6xXTnT86B4L5fp8rvtcmNSpvtNz8En9jG61ywV2uWyeHy"
 	startTime := time.Now().Add(time.Minute)
-	duration := 2 * 7 * 24 * time.Hour // 2 weeks
+	duration := 4 * 7 * 24 * time.Hour // 4 weeks
 	weight := units.Schmeckle
 
 	subnetID, err := ids.FromString(subnetIDStr)

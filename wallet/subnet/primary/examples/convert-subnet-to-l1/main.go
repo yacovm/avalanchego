@@ -6,8 +6,8 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"github.com/ava-labs/avalanchego/utils/constants"
 	"log"
-	"time"
 
 	"github.com/ava-labs/avalanchego/api/info"
 	"github.com/ava-labs/avalanchego/genesis"
@@ -20,52 +20,32 @@ import (
 )
 
 func main() {
-	key := genesis.EWOQKey
-	uri := primary.LocalAPIURI
-	kc := secp256k1fx.NewKeychain(key)
-	subnetID := ids.FromStringOrPanic("2DeHa7Qb6sufPkmQcFWG2uCd4pBPv9WB6dkzroiMQhd1NSRtof")
-	chainID := ids.FromStringOrPanic("E8nTR9TtRwfkS7XFjTYUYHENQ91mkPMtDUwwCeu7rNgBBtkqu")
-	addressHex := ""
-	weight := units.Schmeckle
 
-	address, err := hex.DecodeString(addressHex)
-	if err != nil {
-		log.Fatalf("failed to decode address %q: %s\n", addressHex, err)
+	var conversionData []*txs.ConvertSubnetToL1Validator
+
+	for _, uri := range []string{
+		"http://localhost:9650",
+		"http://localhost:9660",
+		"http://localhost:9670",
+		"http://localhost:9680",
+		"http://localhost:9690",
+	} {
+		cd := getValidator(uri)
+		conversionData = append(conversionData, &cd)
 	}
 
 	ctx := context.Background()
-	infoClient := info.NewClient(uri)
-
-	nodeInfoStartTime := time.Now()
-	nodeID, nodePoP, err := infoClient.GetNodeID(ctx)
-	if err != nil {
-		log.Fatalf("failed to fetch node IDs: %s\n", err)
-	}
-	log.Printf("fetched node ID %s in %s\n", nodeID, time.Since(nodeInfoStartTime))
-
-	validationID := subnetID.Append(0)
-	conversionID, err := message.SubnetToL1ConversionID(message.SubnetToL1ConversionData{
-		SubnetID:       subnetID,
-		ManagerChainID: chainID,
-		ManagerAddress: address,
-		Validators: []message.SubnetToL1ConversionValidatorData{
-			{
-				NodeID:       nodeID.Bytes(),
-				BLSPublicKey: nodePoP.PublicKey,
-				Weight:       weight,
-			},
-		},
-	})
-	if err != nil {
-		log.Fatalf("failed to calculate conversionID: %s\n", err)
-	}
+	key := genesis.EWOQKey
+	kc := secp256k1fx.NewKeychain(key)
 
 	// MakePWallet fetches the available UTXOs owned by [kc] on the P-chain that
 	// [uri] is hosting and registers [subnetID].
-	walletSyncStartTime := time.Now()
+
+	subnetID := ids.FromStringOrPanic("BKBZ6xXTnT86B4L5fp8rvtcmNSpvtNz8En9jG61ywV2uWyeHy")
+
 	wallet, err := primary.MakePWallet(
 		ctx,
-		uri,
+		"http://localhost:9650",
 		kc,
 		primary.WalletConfig{
 			SubnetIDs: []ids.ID{subnetID},
@@ -74,32 +54,42 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to initialize wallet: %s\n", err)
 	}
-	log.Printf("synced wallet in %s\n", time.Since(walletSyncStartTime))
 
-	convertSubnetToL1StartTime := time.Now()
+	//chainID := ids.FromStringOrPanic("ugwur9uedcTZ8di3PZjG4rLDnepzCYSE8o2YDEJPSHusCGcCP")
+	chainID := constants.PlatformChainID
+	addressHex := ""
+	address, err := hex.DecodeString(addressHex)
+
 	convertSubnetToL1Tx, err := wallet.IssueConvertSubnetToL1Tx(
 		subnetID,
 		chainID,
 		address,
-		[]*txs.ConvertSubnetToL1Validator{
-			{
-				NodeID:                nodeID.Bytes(),
-				Weight:                weight,
-				Balance:               units.Avax,
-				Signer:                *nodePoP,
-				RemainingBalanceOwner: message.PChainOwner{},
-				DeactivationOwner:     message.PChainOwner{},
-			},
-		},
+		conversionData,
 	)
 	if err != nil {
 		log.Fatalf("failed to issue subnet conversion transaction: %s\n", err)
 	}
-	log.Printf("converted subnet %s with transactionID %s, validationID %s, and conversionID %s in %s\n",
+	log.Printf("converted subnet %s with transactionID %s",
 		subnetID,
 		convertSubnetToL1Tx.ID(),
-		validationID,
-		conversionID,
-		time.Since(convertSubnetToL1StartTime),
 	)
+}
+
+func getValidator(uri string) txs.ConvertSubnetToL1Validator {
+	ctx := context.Background()
+
+	infoClient := info.NewClient(uri)
+	nodeID, nodePoP, err := infoClient.GetNodeID(ctx)
+	if err != nil {
+		log.Fatalf("failed to fetch node IDs: %s\n", err)
+	}
+
+	return txs.ConvertSubnetToL1Validator{
+		NodeID:                nodeID.Bytes(),
+		Balance:               units.Avax,
+		Signer:                *nodePoP,
+		RemainingBalanceOwner: message.PChainOwner{},
+		DeactivationOwner:     message.PChainOwner{},
+		Weight:                units.Schmeckle,
+	}
 }

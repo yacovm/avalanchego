@@ -4,6 +4,8 @@
 package p
 
 import (
+	"fmt"
+	"github.com/ava-labs/avalanchego/utils/formatting"
 	"github.com/ava-labs/avalanchego/vms/platformvm"
 	"github.com/ava-labs/avalanchego/vms/platformvm/txs"
 	"github.com/ava-labs/avalanchego/wallet/chain/p/wallet"
@@ -33,6 +35,11 @@ func (c *Client) IssueTx(
 ) error {
 	ops := common.NewOptions(options)
 	ctx := ops.Context()
+	hexTx, err := formatting.Encode(formatting.Hex, tx.Bytes())
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(">>>", hexTx)
 	txID, err := c.client.IssueTx(ctx, tx.Bytes())
 	if err != nil {
 		return err
