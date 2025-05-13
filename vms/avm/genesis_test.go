@@ -7,10 +7,11 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/utils/constants"
 	"github.com/ava-labs/avalanchego/utils/formatting/address"
-	"github.com/stretchr/testify/require"
 )
 
 func TestGenesisAssetCompare(t *testing.T) {
@@ -46,7 +47,7 @@ func TestGenesisAssetCompare(t *testing.T) {
 
 func TestNewGenesisBytes(t *testing.T) {
 	require := require.New(t)
-	var addrStrArray = []string{
+	addrStrArray := []string{
 		"A9bTQjfYGBFK3JPRJqF2eh3JYL7cHocvy",
 		"6mxBGnjGDCKgkVe7yfrmvMA7xE7qCv3vv",
 		"6ncQ19Q2U4MamkCYzshhD8XFjfwAWFzTa",
