@@ -10,23 +10,20 @@ import (
 
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/utils/constants"
-	"github.com/ava-labs/avalanchego/utils/formatting"
 	"github.com/ava-labs/avalanchego/utils/formatting/address"
-	"github.com/ava-labs/avalanchego/utils/json"
-	"github.com/ava-labs/avalanchego/vms/platformvm/genesis"
 )
 
-func TestBuildGenesisInvalidUTXOBalance(t *testing.T) {
+func TestNewGenesisBytesInvalidUTXOBalance(t *testing.T) {
 	require := require.New(t)
 	nodeID := ids.BuildTestNodeID([]byte{1, 2, 3})
 	addr, err := address.FormatBech32(constants.UnitTestHRP, nodeID.Bytes())
 	require.NoError(err)
 
-	utxo := UTXO{
+	utxo := Allocation{
 		Address: addr,
 		Amount:  0,
 	}
-	weight := json.Uint64(987654321)
+	weight := uint64(987654321)
 	validator := GenesisPermissionlessValidator{
 		GenesisValidator: GenesisValidator{
 			EndTime: 15,
@@ -37,40 +34,37 @@ func TestBuildGenesisInvalidUTXOBalance(t *testing.T) {
 			Threshold: 1,
 			Addresses: []string{addr},
 		},
-		Staked: []UTXO{{
+		Staked: []Allocation{{
 			Amount:  weight,
 			Address: addr,
 		}},
 	}
 
-	args := BuildGenesisArgs{
-		UTXOs: []UTXO{
-			utxo,
-		},
-		Validators: []GenesisPermissionlessValidator{
-			validator,
-		},
-		Time:     5,
-		Encoding: formatting.Hex,
-	}
-	reply := BuildGenesisReply{}
-
-	ss := StaticService{}
-	err = ss.BuildGenesis(nil, &args, &reply)
+	result, err := NewGenesisBytes(
+		ids.Empty,
+		constants.UnitTestID,
+		[]Allocation{utxo},
+		[]GenesisPermissionlessValidator{validator},
+		nil,
+		5,
+		0,
+		"",
+	)
 	require.ErrorIs(err, errUTXOHasNoValue)
+	require.Empty(result)
 }
 
-func TestBuildGenesisInvalidStakeWeight(t *testing.T) {
+func TestNewGenesisBytesInvalidStakeWeight(t *testing.T) {
 	require := require.New(t)
 	nodeID := ids.BuildTestNodeID([]byte{1, 2, 3})
 	addr, err := address.FormatBech32(constants.UnitTestHRP, nodeID.Bytes())
 	require.NoError(err)
 
-	utxo := UTXO{
+	utxo := Allocation{
 		Address: addr,
 		Amount:  123456789,
 	}
-	weight := json.Uint64(0)
+
 	validator := GenesisPermissionlessValidator{
 		GenesisValidator: GenesisValidator{
 			StartTime: 0,
@@ -81,41 +75,38 @@ func TestBuildGenesisInvalidStakeWeight(t *testing.T) {
 			Threshold: 1,
 			Addresses: []string{addr},
 		},
-		Staked: []UTXO{{
-			Amount:  weight,
+		Staked: []Allocation{{
+			Amount:  0,
 			Address: addr,
 		}},
 	}
 
-	args := BuildGenesisArgs{
-		UTXOs: []UTXO{
-			utxo,
-		},
-		Validators: []GenesisPermissionlessValidator{
-			validator,
-		},
-		Time:     5,
-		Encoding: formatting.Hex,
-	}
-	reply := BuildGenesisReply{}
-
-	ss := StaticService{}
-	err = ss.BuildGenesis(nil, &args, &reply)
+	result, err := NewGenesisBytes(
+		ids.Empty,
+		0,
+		[]Allocation{utxo},
+		[]GenesisPermissionlessValidator{validator},
+		nil,
+		5,
+		0,
+		"",
+	)
 	require.ErrorIs(err, errValidatorHasNoWeight)
+	require.Empty(result)
 }
 
-func TestBuildGenesisInvalidEndtime(t *testing.T) {
+func TestNewGenesisBytesInvalidEndtime(t *testing.T) {
 	require := require.New(t)
 	nodeID := ids.BuildTestNodeID([]byte{1, 2, 3})
 	addr, err := address.FormatBech32(constants.UnitTestHRP, nodeID.Bytes())
 	require.NoError(err)
 
-	utxo := UTXO{
+	utxo := Allocation{
 		Address: addr,
 		Amount:  123456789,
 	}
 
-	weight := json.Uint64(987654321)
+	weight := uint64(987654321)
 	validator := GenesisPermissionlessValidator{
 		GenesisValidator: GenesisValidator{
 			StartTime: 0,
@@ -126,41 +117,38 @@ func TestBuildGenesisInvalidEndtime(t *testing.T) {
 			Threshold: 1,
 			Addresses: []string{addr},
 		},
-		Staked: []UTXO{{
+		Staked: []Allocation{{
 			Amount:  weight,
 			Address: addr,
 		}},
 	}
 
-	args := BuildGenesisArgs{
-		UTXOs: []UTXO{
-			utxo,
-		},
-		Validators: []GenesisPermissionlessValidator{
-			validator,
-		},
-		Time:     5,
-		Encoding: formatting.Hex,
-	}
-	reply := BuildGenesisReply{}
-
-	ss := StaticService{}
-	err = ss.BuildGenesis(nil, &args, &reply)
+	result, err := NewGenesisBytes(
+		ids.Empty,
+		constants.UnitTestID,
+		[]Allocation{utxo},
+		[]GenesisPermissionlessValidator{validator},
+		nil,
+		5,
+		0,
+		"",
+	)
 	require.ErrorIs(err, errValidatorAlreadyExited)
+	require.Empty(result)
 }
 
-func TestBuildGenesisReturnsSortedValidators(t *testing.T) {
+func TestNewGenesisBytesReturnsSortedValidators(t *testing.T) {
 	require := require.New(t)
 	nodeID := ids.BuildTestNodeID([]byte{1})
 	addr, err := address.FormatBech32(constants.UnitTestHRP, nodeID.Bytes())
 	require.NoError(err)
 
-	utxo := UTXO{
+	allocation := Allocation{
 		Address: addr,
 		Amount:  123456789,
 	}
 
-	weight := json.Uint64(987654321)
+	weight := uint64(987654321)
 	validator1 := GenesisPermissionlessValidator{
 		GenesisValidator: GenesisValidator{
 			StartTime: 0,
@@ -171,7 +159,7 @@ func TestBuildGenesisReturnsSortedValidators(t *testing.T) {
 			Threshold: 1,
 			Addresses: []string{addr},
 		},
-		Staked: []UTXO{{
+		Staked: []Allocation{{
 			Amount:  weight,
 			Address: addr,
 		}},
@@ -187,7 +175,7 @@ func TestBuildGenesisReturnsSortedValidators(t *testing.T) {
 			Threshold: 1,
 			Addresses: []string{addr},
 		},
-		Staked: []UTXO{{
+		Staked: []Allocation{{
 			Amount:  weight,
 			Address: addr,
 		}},
@@ -203,41 +191,37 @@ func TestBuildGenesisReturnsSortedValidators(t *testing.T) {
 			Threshold: 1,
 			Addresses: []string{addr},
 		},
-		Staked: []UTXO{{
+		Staked: []Allocation{{
 			Amount:  weight,
 			Address: addr,
 		}},
 	}
 
-	args := BuildGenesisArgs{
-		AvaxAssetID: ids.ID{'d', 'u', 'm', 'm', 'y', ' ', 'I', 'D'},
-		UTXOs: []UTXO{
-			utxo,
-		},
-		Validators: []GenesisPermissionlessValidator{
+	avaxAssetID := ids.ID{'d', 'u', 'm', 'm', 'y', ' ', 'I', 'D'}
+	genesisBytes, err := NewGenesisBytes(
+		avaxAssetID,
+		constants.UnitTestID,
+		[]Allocation{allocation},
+		[]GenesisPermissionlessValidator{
 			validator1,
 			validator2,
 			validator3,
 		},
-		Time:     5,
-		Encoding: formatting.Hex,
-	}
-	reply := BuildGenesisReply{}
-
-	ss := StaticService{}
-	require.NoError(ss.BuildGenesis(nil, &args, &reply))
-
-	genesisBytes, err := formatting.Decode(reply.Encoding, reply.Bytes)
+		nil,
+		5,
+		0,
+		"",
+	)
 	require.NoError(err)
-
-	genesis, err := genesis.Parse(genesisBytes)
+	require.NotEmpty(genesisBytes)
+	genesis, err := Parse(genesisBytes)
 	require.NoError(err)
 
 	validators := genesis.Validators
 	require.Len(validators, 3)
 }
 
-func TestUTXOCompare(t *testing.T) {
+func TestAllocationCompare(t *testing.T) {
 	var (
 		smallerAddr = ids.ShortID{}
 		largerAddr  = ids.ShortID{1}
@@ -249,39 +233,39 @@ func TestUTXOCompare(t *testing.T) {
 
 	type test struct {
 		name     string
-		utxo1    UTXO
-		utxo2    UTXO
+		alloc1   Allocation
+		alloc2   Allocation
 		expected int
 	}
 	tests := []test{
 		{
 			name:     "both empty",
-			utxo1:    UTXO{},
-			utxo2:    UTXO{},
+			alloc1:   Allocation{},
+			alloc2:   Allocation{},
 			expected: 0,
 		},
 		{
-			name:  "locktime smaller",
-			utxo1: UTXO{},
-			utxo2: UTXO{
+			name:   "locktime smaller",
+			alloc1: Allocation{},
+			alloc2: Allocation{
 				Locktime: 1,
 			},
 			expected: -1,
 		},
 		{
-			name:  "amount smaller",
-			utxo1: UTXO{},
-			utxo2: UTXO{
+			name:   "amount smaller",
+			alloc1: Allocation{},
+			alloc2: Allocation{
 				Amount: 1,
 			},
 			expected: -1,
 		},
 		{
 			name: "address smaller",
-			utxo1: UTXO{
+			alloc1: Allocation{
 				Address: smallerAddrStr,
 			},
-			utxo2: UTXO{
+			alloc2: Allocation{
 				Address: largerAddrStr,
 			},
 			expected: -1,
@@ -292,8 +276,8 @@ func TestUTXOCompare(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			require := require.New(t)
 
-			require.Equal(tt.expected, tt.utxo1.Compare(tt.utxo2))
-			require.Equal(-tt.expected, tt.utxo2.Compare(tt.utxo1))
+			require.Equal(tt.expected, tt.alloc1.Compare(tt.alloc2))
+			require.Equal(-tt.expected, tt.alloc2.Compare(tt.alloc1))
 		})
 	}
 }
