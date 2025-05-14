@@ -72,25 +72,25 @@ type Allocation struct {
 }
 
 // Compare compares two allocations
-func (utxo Allocation) Compare(a Allocation) int {
-	if locktimeCmp := cmp.Compare(utxo.Locktime, a.Locktime); locktimeCmp != 0 {
+func (a Allocation) Compare(other Allocation) int {
+	if locktimeCmp := cmp.Compare(a.Locktime, other.Locktime); locktimeCmp != 0 {
 		return locktimeCmp
 	}
-	if amountCmp := cmp.Compare(utxo.Amount, a.Amount); amountCmp != 0 {
+	if amountCmp := cmp.Compare(a.Amount, other.Amount); amountCmp != 0 {
 		return amountCmp
 	}
 
-	utxoAddr, err := bech32ToID(utxo.Address)
+	addr, err := bech32ToID(a.Address)
 	if err != nil {
 		return 0
 	}
 
-	otherAddr, err := bech32ToID(a.Address)
+	otherAddr, err := bech32ToID(other.Address)
 	if err != nil {
 		return 0
 	}
 
-	return utxoAddr.Compare(otherAddr)
+	return addr.Compare(otherAddr)
 }
 
 // GenesisValidator represents a validator at genesis
