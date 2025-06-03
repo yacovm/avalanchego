@@ -17,8 +17,9 @@ func TestSimpleSubscriber(t *testing.T) {
 
 	t.Run("TestSubscribe after publish", func(t *testing.T) {
 		subscriber.Publish(PendingTxs)
-		msg := subscriber.SubscribeToEvents(ctx)
+		msg, height := subscriber.SubscribeToEvents(ctx, 5000)
 		require.Equal(t, PendingTxs, msg)
+		require.Equal(t, uint64(5000), height)
 	})
 
 	t.Run("TestSubscribe before publish", func(t *testing.T) {
@@ -27,7 +28,7 @@ func TestSimpleSubscriber(t *testing.T) {
 			subscriber.Publish(StateSyncDone)
 		}()
 
-		msg := subscriber.SubscribeToEvents(ctx)
+		msg, _ := subscriber.SubscribeToEvents(ctx, 0)
 		require.Equal(t, StateSyncDone, msg)
 	})
 
@@ -36,7 +37,7 @@ func TestSimpleSubscriber(t *testing.T) {
 			time.Sleep(time.Millisecond * 10)
 			cancel()
 		}()
-		msg := subscriber.SubscribeToEvents(ctx)
+		msg, _ := subscriber.SubscribeToEvents(ctx, 0)
 		require.Equal(t, Message(0), msg)
 	})
 
@@ -44,12 +45,17 @@ func TestSimpleSubscriber(t *testing.T) {
 
 func TestSubscriptionDelayer(t *testing.T) {
 	msgs := make(chan Message)
-	subscription := func(ctx context.Context) Message {
-		msg := <-msgs
-		return msg
+	subscription := func(ctx context.Context, uint65 uint64) (Message, uint64) {
+		select {
+		case msg := <-msgs:
+			return msg, 0
+		case <-ctx.Done():
+			return Message(0), 0
+		}
 	}
 
 	sd := NewSubscriptionDelayer(subscription)
+	defer sd.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -61,7 +67,7 @@ func TestSubscriptionDelayer(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		msg := sd.SubscribeToEvents(ctx)
+		msg, _ := sd.SubscribeToEvents(ctx, 0)
 		require.Equal(t, PendingTxs, msg)
 		require.True(t, time.Since(start) > time.Millisecond*20)
 	}()
@@ -81,11 +87,11 @@ func TestSubscriptionDelayer(t *testing.T) {
 
 	go func() {
 		time.Sleep(time.Millisecond * 10)
-		sd.SetAbsorbedMsg(StateSyncDone)
+		sd.SetAbsorbedMsgAndHeight(StateSyncDone, 0)
 		sd.Absorb(ctx)
 		sd.Release()
 	}()
 
-	msg := sd.SubscribeToEvents(ctx)
+	msg, _ := sd.SubscribeToEvents(ctx, 0)
 	require.Equal(t, StateSyncDone, msg)
 }

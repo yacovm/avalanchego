@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ava-labs/avalanchego/utils/logging"
 	"net/http"
 	"time"
 
@@ -82,6 +83,7 @@ var (
 // VMClient is an implementation of a VM that talks over RPC.
 type VMClient struct {
 	*chain.State
+	logger          logging.Logger
 	client          vmpb.VMClient
 	runtime         runtime.Stopper
 	pid             int
@@ -108,6 +110,7 @@ func NewClient(
 	pid int,
 	processTracker resource.ProcessTracker,
 	metricsGatherer metrics.MultiGatherer,
+	logger logging.Logger,
 ) *VMClient {
 	return &VMClient{
 		client:          vmpb.NewVMClient(clientConn),
@@ -116,6 +119,7 @@ func NewClient(
 		processTracker:  processTracker,
 		metricsGatherer: metricsGatherer,
 		conns:           []*grpc.ClientConn{clientConn},
+		logger:          logger,
 	}
 }
 
@@ -164,7 +168,7 @@ func (vm *VMClient) Initialize(
 		zap.String("address", dbServerAddr),
 	)
 
-	vm.messenger = messenger.NewServer()
+	vm.messenger = messenger.NewServer(chainCtx.Log)
 	vm.sharedMemory = gsharedmemory.NewServer(chainCtx.SharedMemory, db)
 	vm.bcLookup = galiasreader.NewServer(chainCtx.BCLookup)
 	vm.appSender = appsender.NewServer(appSender)
@@ -291,8 +295,13 @@ func (vm *VMClient) newDBServer(db database.Database) *grpc.Server {
 	return server
 }
 
-func (vm *VMClient) SubscribeToEvents(ctx context.Context) common.Message {
-	return vm.messenger.SubscribeToEvents(ctx)
+func (vm *VMClient) SubscribeToEvents(ctx context.Context, pChainHeight uint64) (common.Message, uint64) {
+	msg, height, err := vm.messenger.SubscribeToEvents(ctx, pChainHeight)
+	if err != nil {
+		vm.logger.Error("failed to subscribe to events", zap.Error(err))
+		return 0, 0
+	}
+	return msg, height
 }
 
 func (vm *VMClient) newInitServer() *grpc.Server {

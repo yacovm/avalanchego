@@ -20,7 +20,6 @@ import (
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/snow"
 	"github.com/ava-labs/avalanchego/snow/consensus/snowman"
-	"github.com/ava-labs/avalanchego/snow/engine/common"
 	"github.com/ava-labs/avalanchego/utils/constants"
 	"github.com/ava-labs/avalanchego/utils/crypto/secp256k1"
 	"github.com/ava-labs/avalanchego/utils/logging"
@@ -256,7 +255,7 @@ func TestBuilderBuildBlock(t *testing.T) {
 				// tx1 is added to the block first, so tx2 should be dropped.
 				inputID := ids.GenerateTestID()
 				unsignedTx1 := txsmock.NewUnsignedTx(ctrl)
-				unsignedTx1.EXPECT().Visit(gomock.Any()).Return(nil)  // Pass semantic verification
+				unsignedTx1.EXPECT().Visit(gomock.Any()).Return(nil) // Pass semantic verification
 				unsignedTx1.EXPECT().Visit(gomock.Any()).DoAndReturn( // Pass execution
 					func(visitor txs.Visitor) error {
 						require.IsType(t, &txexecutor.Executor{}, visitor)
@@ -274,7 +273,7 @@ func TestBuilderBuildBlock(t *testing.T) {
 				tx1.SetBytes(nil, tx1Bytes)
 
 				unsignedTx2 := txsmock.NewUnsignedTx(ctrl)
-				unsignedTx2.EXPECT().Visit(gomock.Any()).Return(nil)  // Pass semantic verification
+				unsignedTx2.EXPECT().Visit(gomock.Any()).Return(nil) // Pass semantic verification
 				unsignedTx2.EXPECT().Visit(gomock.Any()).DoAndReturn( // Pass execution
 					func(visitor txs.Visitor) error {
 						require.IsType(t, &txexecutor.Executor{}, visitor)
@@ -361,7 +360,7 @@ func TestBuilderBuildBlock(t *testing.T) {
 
 				inputID := ids.GenerateTestID()
 				unsignedTx := txsmock.NewUnsignedTx(ctrl)
-				unsignedTx.EXPECT().Visit(gomock.Any()).Return(nil)  // Pass semantic verification
+				unsignedTx.EXPECT().Visit(gomock.Any()).Return(nil) // Pass semantic verification
 				unsignedTx.EXPECT().Visit(gomock.Any()).DoAndReturn( // Pass execution
 					func(visitor txs.Visitor) error {
 						require.IsType(t, &txexecutor.Executor{}, visitor)
@@ -433,7 +432,7 @@ func TestBuilderBuildBlock(t *testing.T) {
 
 				inputID := ids.GenerateTestID()
 				unsignedTx := txsmock.NewUnsignedTx(ctrl)
-				unsignedTx.EXPECT().Visit(gomock.Any()).Return(nil)  // Pass semantic verification
+				unsignedTx.EXPECT().Visit(gomock.Any()).Return(nil) // Pass semantic verification
 				unsignedTx.EXPECT().Visit(gomock.Any()).DoAndReturn( // Pass execution
 					func(visitor txs.Visitor) error {
 						require.IsType(t, &txexecutor.Executor{}, visitor)
@@ -488,8 +487,7 @@ func TestBlockBuilderAddLocalTx(t *testing.T) {
 	require := require.New(t)
 
 	registerer := prometheus.NewRegistry()
-	toEngine := make(chan common.Message, 100)
-	mempool, err := mempool.New("mempool", registerer, toEngine)
+	mempool, err := mempool.New("mempool", registerer, func() {})
 	require.NoError(err)
 	// add a tx to the mempool
 	tx := transactions[0]

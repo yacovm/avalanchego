@@ -10,17 +10,24 @@ import (
 
 type Subscriber interface {
 	// SubscribeToEvents blocks until either the given context is cancelled, or a message is returned.
-	SubscribeToEvents(ctx context.Context) Message
+	// The given pChainHeight is the height of the P-chain at the time of subscription.
+	// The returned uint64 corresponds to the P-chain height at the time of returning the message.
+	// The caller is expected to propagate to subsequent calls the P-chain height returned and not the one passed in.
+	SubscribeToEvents(ctx context.Context, pChainHeight uint64) (Message, uint64)
 }
 
 // Subscription is a function that blocks until either the given context is cancelled, or a message is returned.
-type Subscription func(ctx context.Context) Message
+// The given pChainHeight is the height of the P-chain at the time of subscription.
+// The returned uint64 corresponds to the P-chain height at the time of returning the message.
+// The caller is expected to propagate to subsequent calls the P-chain height returned and not the one passed in.
+type Subscription func(ctx context.Context, pChainHeight uint64) (Message, uint64)
 
 type SimpleSubscriber struct {
 	lock   sync.Mutex
 	signal sync.Cond
 
-	msg *Message
+	msg    *Message
+	closed bool
 }
 
 func NewSimpleSubscriber() *SimpleSubscriber {
@@ -37,7 +44,15 @@ func (ss *SimpleSubscriber) Publish(msg Message) {
 	ss.signal.Broadcast()
 }
 
-func (ss *SimpleSubscriber) SubscribeToEvents(ctx context.Context) Message {
+func (ss *SimpleSubscriber) Close() {
+	ss.lock.Lock()
+	defer ss.lock.Unlock()
+
+	ss.closed = true
+	ss.signal.Broadcast()
+}
+
+func (ss *SimpleSubscriber) SubscribeToEvents(ctx context.Context, pChainHeight uint64) (Message, uint64) {
 	ss.lock.Lock()
 	defer ss.lock.Unlock()
 
@@ -53,24 +68,30 @@ func (ss *SimpleSubscriber) SubscribeToEvents(ctx context.Context) Message {
 		if ss.msg != nil {
 			msg := *ss.msg
 			ss.msg = nil
-			return msg
+			return msg, pChainHeight
 		}
 
 		select {
 		case <-ctx.Done():
-			return 0
+			return 0, 0
 		default:
 			ss.signal.Wait()
 		}
 	}
 }
 
-type SubscriptionDelayer struct {
-	lock   sync.Mutex
-	signal sync.Cond
+type messageHeight struct {
+	message Message
+	height  uint64
+}
 
-	absorbedMsg *Message
-	releasedMsg *Message
+type SubscriptionDelayer struct {
+	lock    sync.Mutex
+	signal  sync.Cond
+	running sync.WaitGroup
+
+	absorbedMsgHeight *messageHeight
+	releasedMsgHeight *messageHeight
 
 	closed    bool
 	subscribe Subscription
@@ -84,12 +105,18 @@ func NewSubscriptionDelayer(s Subscription) *SubscriptionDelayer {
 
 	sd.signal = *sync.NewCond(&sd.lock)
 
-	go sd.forward()
+	sd.running.Add(1)
+	go func() {
+		defer sd.running.Done()
+		sd.forward()
+	}()
 
 	return sd
 }
 
 func (sd *SubscriptionDelayer) Close() {
+	defer sd.running.Wait()
+
 	sd.lock.Lock()
 	defer sd.lock.Unlock()
 
@@ -114,11 +141,12 @@ func (sd *SubscriptionDelayer) forward() {
 		if sd.isClosed() {
 			return
 		}
-		msg := sd.subscribe(ctx)
+		// We pass 0 as P-chain height because we only care about what we get back as a result.
+		msg, height := sd.subscribe(ctx, 0)
 		if sd.isClosed() {
 			return
 		}
-		sd.SetAbsorbedMsg(msg)
+		sd.SetAbsorbedMsgAndHeight(msg, height)
 		sd.signal.Broadcast()
 	}
 }
@@ -142,7 +170,7 @@ func (sd *SubscriptionDelayer) Absorb(ctx context.Context) {
 		default:
 		}
 
-		if sd.absorbedMsg != nil {
+		if sd.absorbedMsgHeight != nil {
 			return
 		}
 
@@ -155,19 +183,22 @@ func (sd *SubscriptionDelayer) Release() {
 	sd.lock.Lock()
 	defer sd.lock.Unlock()
 
-	if sd.absorbedMsg != nil {
-		sd.releasedMsg = sd.absorbedMsg
-		sd.absorbedMsg = nil
+	if sd.absorbedMsgHeight != nil {
+		sd.releasedMsgHeight = sd.absorbedMsgHeight
+		sd.absorbedMsgHeight = nil
 	}
 
 	sd.signal.Broadcast()
 }
 
-func (sd *SubscriptionDelayer) SetAbsorbedMsg(msg Message) {
+func (sd *SubscriptionDelayer) SetAbsorbedMsgAndHeight(msg Message, height uint64) {
 	sd.lock.Lock()
 	defer sd.lock.Unlock()
 
-	sd.absorbedMsg = &msg
+	sd.absorbedMsgHeight = &messageHeight{
+		message: msg,
+		height:  height,
+	}
 }
 
 func (sd *SubscriptionDelayer) createContext() context.Context {
@@ -178,7 +209,7 @@ func (sd *SubscriptionDelayer) createContext() context.Context {
 	return ctx
 }
 
-func (sd *SubscriptionDelayer) SubscribeToEvents(ctx context.Context) Message {
+func (sd *SubscriptionDelayer) SubscribeToEvents(ctx context.Context, _ uint64) (Message, uint64) {
 	sd.lock.Lock()
 	defer sd.lock.Unlock()
 
@@ -192,18 +223,18 @@ func (sd *SubscriptionDelayer) SubscribeToEvents(ctx context.Context) Message {
 
 	for {
 		if sd.closed {
-			return 0
+			return 0, 0
 		}
 
-		if sd.releasedMsg != nil {
-			msg := *sd.releasedMsg
-			sd.releasedMsg = nil
-			return msg
+		if sd.releasedMsgHeight != nil {
+			releasedMsgHeight := *sd.releasedMsgHeight
+			sd.releasedMsgHeight = nil
+			return releasedMsgHeight.message, releasedMsgHeight.height
 		}
 
 		select {
 		case <-ctx.Done():
-			return 0
+			return 0, 0
 		default:
 			sd.signal.Wait()
 		}

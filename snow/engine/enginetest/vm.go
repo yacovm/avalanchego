@@ -57,14 +57,14 @@ type VM struct {
 	AppGossipF         func(ctx context.Context, nodeID ids.NodeID, msg []byte) error
 	AppRequestFailedF  func(ctx context.Context, nodeID ids.NodeID, requestID uint32, appErr *common.AppError) error
 	VersionF           func(context.Context) (string, error)
-	SubscribeToEventsF func(context.Context) common.Message
+	SubscribeToEventsF func(context.Context, uint64) (common.Message, uint64)
 }
 
-func (vm *VM) SubscribeToEvents(context.Context) common.Message {
+func (vm *VM) SubscribeToEvents(_ context.Context, pChainHeight uint64) (common.Message, uint64) {
 	if vm.SubscribeToEventsF != nil {
-		return vm.SubscribeToEventsF(context.Background())
+		return vm.SubscribeToEventsF(context.Background(), pChainHeight)
 	}
-	return common.Message(0)
+	return common.Message(0), 0
 }
 
 func (vm *VM) Default(cant bool) {

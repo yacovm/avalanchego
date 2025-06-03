@@ -68,7 +68,6 @@ type environment struct {
 	genesisBytes []byte
 	genesisTx    *txs.Tx
 	sharedMemory *atomic.Memory
-	issuer       chan common.Message
 	vm           *VM
 	txBuilder    *txstest.Builder
 }
@@ -129,7 +128,6 @@ func setup(tb testing.TB, c *envConfig) *environment {
 		ctx,
 		prefixdb.New([]byte{1}, baseDB),
 		genesisBytes,
-		nil,
 		configBytes,
 		nil,
 		append(
@@ -149,13 +147,11 @@ func setup(tb testing.TB, c *envConfig) *environment {
 	))
 
 	stopVertexID := ids.GenerateTestID()
-	issuer := make(chan common.Message, 1)
 
 	env := &environment{
 		genesisBytes: genesisBytes,
 		genesisTx:    getCreateTxFromGenesisTest(tb, genesisBytes, assetName),
 		sharedMemory: m,
-		issuer:       issuer,
 		vm:           vm,
 		txBuilder:    txstest.New(vm.parser.Codec(), vm.ctx, &vm.Config, vm.feeAssetID, vm.state),
 	}
@@ -165,7 +161,7 @@ func setup(tb testing.TB, c *envConfig) *environment {
 		return env
 	}
 
-	require.NoError(vm.Linearize(context.Background(), stopVertexID, issuer))
+	require.NoError(vm.Linearize(context.Background(), stopVertexID))
 	if c.notBootstrapped {
 		return env
 	}

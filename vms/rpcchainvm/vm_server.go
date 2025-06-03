@@ -213,7 +213,14 @@ func (vm *VMServer) Initialize(ctx context.Context, req *vmpb.InitializeRequest)
 
 	vm.connCloser.Add(clientConn)
 
-	msgClient := messenger.NewClient(messengerpb.NewMessengerClient(clientConn))
+	subscribe := func(ctx context.Context, height uint64) (messengerpb.Message, uint64) {
+		msg, height := vm.vm.SubscribeToEvents(ctx, height)
+		return messengerpb.Message(msg), height
+	}
+	msgClient := messenger.NewClient(messengerpb.NewMessengerClient(clientConn), vm.log, subscribe)
+	defer func() {
+		go msgClient.Run()
+	}()
 	sharedMemoryClient := gsharedmemory.NewClient(sharedmemorypb.NewSharedMemoryClient(clientConn))
 	bcLookupClient := galiasreader.NewClient(aliasreaderpb.NewAliasReaderClient(clientConn))
 	appSenderClient := appsender.NewClient(appsenderpb.NewAppSenderClient(clientConn))
@@ -221,18 +228,6 @@ func (vm *VMServer) Initialize(ctx context.Context, req *vmpb.InitializeRequest)
 	warpSignerClient := gwarp.NewClient(warppb.NewSignerClient(clientConn))
 
 	vm.closed = make(chan struct{})
-	go func() {
-		for {
-			ctx := vm.getContext()
-			msg := vm.vm.SubscribeToEvents(ctx)
-			select {
-			case <-vm.closed:
-				return
-			default:
-				_ = msgClient.Notify(msg)
-			}
-		}
-	}()
 
 	vm.ctx = &snow.Context{
 		NetworkID:       req.NetworkId,
