@@ -65,6 +65,9 @@ func (ss *SimpleSubscriber) WaitForEvent(ctx context.Context) (Message, error) {
 
 	go func() {
 		<-ctx.Done()
+
+		ss.lock.Lock()
+		defer ss.lock.Unlock()
 		ss.signal.Broadcast()
 	}()
 
@@ -103,8 +106,10 @@ type SubscriptionProxy struct {
 	signal  sync.Cond
 	running sync.WaitGroup
 
-	absorbedMsg *Message
-	releasedMsg *Message
+	// pendingMessage is the message that is currently pending to be forwarded to the subscriber.
+	pendingMessage *Message
+	// forwardedMessage is the message that is ready to be forwarded to the subscriber.
+	forwardedMessage *Message
 
 	closed    bool
 	subscribe Subscription
@@ -192,14 +197,14 @@ func (sp *SubscriptionProxy) Forward(ctx context.Context) <-chan struct{} {
 		defer sp.lock.Unlock()
 
 		for {
-			if sp.absorbedMsg != nil {
+			if sp.pendingMessage != nil {
 				select {
 				case <-ctx.Done():
 					close(out)
 					return
 				case out <- struct{}{}:
-					sp.releasedMsg = sp.absorbedMsg
-					sp.absorbedMsg = nil
+					sp.forwardedMessage = sp.pendingMessage
+					sp.pendingMessage = nil
 					sp.signal.Broadcast()
 					return
 				}
@@ -227,7 +232,7 @@ func (sp *SubscriptionProxy) Publish(msg Message) {
 	sp.lock.Lock()
 	defer sp.lock.Unlock()
 
-	sp.absorbedMsg = &msg
+	sp.pendingMessage = &msg
 
 	sp.signal.Broadcast()
 }
@@ -262,9 +267,15 @@ func (sp *SubscriptionProxy) WaitForEvent(ctx context.Context) (Message, error) 
 			return 0, nil
 		}
 
-		if sp.releasedMsg != nil {
-			releasedMsg := *sp.releasedMsg
-			sp.releasedMsg = nil
+		select {
+		case <-ctx.Done():
+			return 0, nil
+		default:
+		}
+
+		if sp.forwardedMessage != nil {
+			releasedMsg := *sp.forwardedMessage
+			sp.forwardedMessage = nil
 			return releasedMsg, nil
 		}
 
