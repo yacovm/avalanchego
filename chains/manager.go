@@ -8,6 +8,7 @@ import (
 	"crypto"
 	"errors"
 	"fmt"
+	"github.com/ava-labs/avalanchego/utils"
 	"os"
 	"path/filepath"
 	"sync"
@@ -468,7 +469,9 @@ func (m *manager) createChain(chainParams ChainParameters) {
 
 	// Tell the chain to start processing messages.
 	// If the X, P, or C Chain panics, do not attempt to recover
-	chain.Handler.Start(context.TODO(), !m.CriticalChains.Contains(chainParams.ID))
+	utils.DecorateAndExecute(func() {
+		chain.Handler.Start(context.TODO(), !m.CriticalChains.Contains(chainParams.ID))
+	}, chainParams.ID.String())
 }
 
 // Create a chain

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ava-labs/avalanchego/utils"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -265,13 +266,20 @@ func (h *handler) Start(ctx context.Context, recoverPanic bool) {
 
 	detachedCtx := context.WithoutCancel(ctx)
 	dispatchSync := func() {
-		h.dispatchSync(detachedCtx)
+		utils.DecorateAndExecute(func() {
+			h.dispatchSync(detachedCtx)
+		}, h.ctx.ChainID.String())
 	}
 	dispatchAsync := func() {
-		h.dispatchAsync(detachedCtx)
+		utils.DecorateAndExecute(func() {
+			h.dispatchAsync(detachedCtx)
+		}, h.ctx.ChainID.String())
+
 	}
 	dispatchChans := func() {
-		h.dispatchChans(detachedCtx)
+		utils.DecorateAndExecute(func() {
+			h.dispatchChans(detachedCtx)
+		}, h.ctx.ChainID.String())
 	}
 	if recoverPanic {
 		go h.ctx.Log.RecoverAndExit(dispatchSync, func() {
