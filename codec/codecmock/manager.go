@@ -40,6 +40,21 @@ func (m *Manager) EXPECT() *ManagerMockRecorder {
 	return m.recorder
 }
 
+// CodecVersion mocks base method.
+func (m *Manager) CodecVersion(bytes []byte) (uint16, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CodecVersion", bytes)
+	ret0, _ := ret[0].(uint16)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CodecVersion indicates an expected call of CodecVersion.
+func (mr *ManagerMockRecorder) CodecVersion(bytes any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CodecVersion", reflect.TypeOf((*Manager)(nil).CodecVersion), bytes)
+}
+
 // Marshal mocks base method.
 func (m *Manager) Marshal(version uint16, source any) ([]byte, error) {
 	m.ctrl.T.Helper()

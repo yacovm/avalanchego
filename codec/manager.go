@@ -29,6 +29,7 @@ var (
 	ErrMarshalNil        = errors.New("can't marshal nil pointer or interface")
 	ErrUnmarshalNil      = errors.New("can't unmarshal nil")
 	ErrUnmarshalTooBig   = errors.New("byte array exceeds maximum length")
+	ErrUnmarshalTooSmall = errors.New("byte array length too small")
 	ErrCantPackVersion   = errors.New("couldn't pack codec version")
 	ErrCantUnpackVersion = errors.New("couldn't unpack codec version")
 	ErrDuplicatedVersion = errors.New("duplicated codec version")
@@ -56,6 +57,10 @@ type Manager interface {
 	// be a pointer or an interface. Returns the version of the codec that
 	// produces the given bytes.
 	Unmarshal(source []byte, destination interface{}) (version uint16, err error)
+
+	// CodecVersion returns the codec version encoded in the given bytes.
+	// Returns an error if the version isn't registered.
+	CodecVersion(bytes []byte) (uint16, error)
 }
 
 // NewManager returns a new codec manager.
@@ -88,6 +93,34 @@ func (m *manager) RegisterCodec(version uint16, codec Codec) error {
 	}
 	m.codecs[version] = codec
 	return nil
+}
+
+// CodecVersion returns the codec version encoded in the given bytes.
+// Returns an error if the version isn't registered.
+func (m *manager) CodecVersion(bytes []byte) (uint16, error) {
+	if len(bytes) < VersionSize {
+		return 0, ErrUnmarshalTooSmall
+	}
+	p := wrappers.Packer{
+		Bytes:   bytes,
+		MaxSize: VersionSize, // We only need to read the version
+	}
+	version := p.UnpackShort()
+	if p.Errored() { // Make sure the codec version is correct
+		return 0, ErrCantUnpackVersion
+	}
+
+	// Check that the version is known before returning it
+	m.lock.RLock()
+	defer m.lock.RUnlock()
+
+	_, exists := m.codecs[version]
+
+	if !exists {
+		return 0, ErrUnknownVersion
+	}
+
+	return version, nil
 }
 
 func (m *manager) Size(version uint16, value interface{}) (int, error) {

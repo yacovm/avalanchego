@@ -78,6 +78,7 @@ var (
 		{"Map", TestMap},
 		{"Can Marshal Large Slices", TestCanMarshalLargeSlices},
 		{"Implements UnmarshalFrom", TestImplementsUnmarshalFrom},
+		{"Codec Version", TestCodecVersion},
 	}
 
 	MultipleTagsTests = []NamedTest{
@@ -1186,4 +1187,39 @@ func TestImplementsUnmarshalFrom(t testing.TB, codec codecpkg.GeneralCodec) {
 		},
 		p,
 	)
+}
+
+func TestCodecVersion(t testing.TB, codec codecpkg.GeneralCodec) {
+	require := require.New(t)
+
+	manager := codecpkg.NewDefaultManager()
+	require.NoError(codec.RegisterType(&MyInnerStruct{}))
+	require.NoError(manager.RegisterCodec(42, codec))
+
+	myStructBytes, err := manager.Marshal(42, &MyInnerStruct{Str: t.Name()})
+	require.NoError(err)
+
+	// Test reading the codec version from the marshaled bytes succeeds
+	ver, err := manager.CodecVersion(myStructBytes)
+	require.NoError(err)
+	require.Equal(uint16(42), ver)
+
+	// Create a new manager and register the codec to a different version
+	otherManager := codecpkg.NewDefaultManager()
+	require.NoError(otherManager.RegisterCodec(43, codec))
+
+	// Marshal the same struct with the other manager
+	myOtherStructBytes, err := otherManager.Marshal(43, &MyInnerStruct{Str: t.Name()})
+	require.NoError(err)
+
+	// Test reading the codec version from the other marshaled bytes fails because it wasn't registered
+	ver, err = manager.CodecVersion(myOtherStructBytes)
+	require.ErrorIs(err, codecpkg.ErrUnknownVersion)
+	require.Equal(uint16(0), ver)
+
+	// Attempt reading the codec version of a too short buffer
+	ver, err = manager.CodecVersion([]byte{0x01})
+	require.ErrorIs(err, codecpkg.ErrUnmarshalTooSmall)
+	ver, err = manager.CodecVersion([]byte{})
+	require.ErrorIs(err, codecpkg.ErrUnmarshalTooSmall)
 }
