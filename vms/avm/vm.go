@@ -207,6 +207,7 @@ func (vm *VM) Initialize(
 	vm.Spender = utxo.NewSpender(&vm.clock, codec)
 
 	state, err := state.New(
+		vm.ctx.AVAXAssetID,
 		vm.db,
 		vm.parser,
 		vm.registerer,
@@ -258,6 +259,9 @@ func (vm *VM) onNormalOperationsStarted() error {
 			return err
 		}
 	}
+
+	vm.state.ListUTXOs()
+
 	return nil
 }
 

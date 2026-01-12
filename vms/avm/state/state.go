@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ava-labs/avalanchego/codec"
+	"github.com/ava-labs/avalanchego/vms/secp256k1fx"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/ava-labs/avalanchego/cache"
@@ -93,6 +95,8 @@ type State interface {
 	// Checksum returns the current state checksum.
 	Checksum() ids.ID
 
+	ListUTXOs() error
+
 	Close() error
 }
 
@@ -112,12 +116,15 @@ type State interface {
  *   '-- lastAcceptedKey -> lastAccepted
  */
 type state struct {
+	avaxAssetID ids.ID
 	parser block.Parser
 	db     *versiondb.Database
 
 	modifiedUTXOs map[ids.ID]*avax.UTXO // map of modified UTXOID -> *UTXO if the UTXO is nil, it has been removed
 	utxoDB        database.Database
 	utxoState     avax.UTXOState
+
+	codec codec.Manager
 
 	addedTxs map[ids.ID]*txs.Tx            // map of txID -> *txs.Tx
 	txCache  cache.Cacher[ids.ID, *txs.Tx] // cache of txID -> *txs.Tx. If the entry is nil, it is not in the database
@@ -138,6 +145,7 @@ type state struct {
 }
 
 func New(
+	avaxAssetID ids.ID,
 	db *versiondb.Database,
 	parser block.Parser,
 	metrics prometheus.Registerer,
@@ -182,6 +190,8 @@ func New(
 	}
 
 	return &state{
+		avaxAssetID: avaxAssetID,
+		codec:  parser.Codec(),
 		parser: parser,
 		db:     db,
 
@@ -203,6 +213,34 @@ func New(
 
 		singletonDB: singletonDB,
 	}, nil
+}
+
+func (s *state) ListUTXOs() error {
+	it := s.utxoDB.NewIteratorWithStart(nil)
+	defer it.Release()
+
+	var amount uint64
+
+	for it.Next() {
+
+
+		utxo := &avax.UTXO{}
+		if _, err := s.codec.Unmarshal(it.Value(), utxo); err != nil {
+			return fmt.Errorf("failed to unmarshal UTXO: %w", err)
+		}
+		if utxo.Asset.ID == s.avaxAssetID {
+			out, ok := utxo.Out.(*secp256k1fx.TransferOutput)
+			if !ok {
+				// We only support [secp256k1fx.TransferOutput]s.
+				continue
+			}
+			amount += out.Amount()
+		}
+	}
+
+	fmt.Println(">>>>>>>>>", amount / 1_000_000_000, "AVAX in UTXO set <<<<<<<<<")
+
+	return nil
 }
 
 func (s *state) GetUTXO(utxoID ids.ID) (*avax.UTXO, error) {
