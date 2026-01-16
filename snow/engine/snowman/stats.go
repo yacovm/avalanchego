@@ -57,7 +57,8 @@ func (fqs *FailedQueryStats) printStats() {
 			return sorted[i].Value > sorted[j].Value
 		})
 
-		sorted = sorted[:10]
+		limit := min(len(sorted), 10)
+		sorted = sorted[:limit]
 
 		var lazy set.Set[ids.NodeID]
 		for _, kv := range sorted {
