@@ -391,12 +391,6 @@ func (e *Engine) Chits(ctx context.Context, nodeID ids.NodeID, requestID uint32,
 
 	// Will record chits once [preferredID] and [preferredIDAtHeight] have been
 	// issued into consensus
-	v := &voter{
-		e:               e,
-		nodeID:          nodeID,
-		requestID:       requestID,
-		responseOptions: responseOptions,
-	}
 
 	// Wait until [preferredID] and [preferredIDAtHeight] have been issued to
 	// consensus before applying this chit.
@@ -408,9 +402,32 @@ func (e *Engine) Chits(ctx context.Context, nodeID ids.NodeID, requestID uint32,
 		deps = append(deps, preferredIDAtHeight)
 	}
 
-	if err := e.blocked.Schedule(ctx, v, deps...); err != nil {
-		return err
+	for _, dep := range deps {
+		v := &voter{
+			e:               e,
+			nodeID:          nodeID,
+			requestID:       requestID,
+			responseOptions: responseOptions,
+		}
+
+		if err := e.blocked.Schedule(ctx, v, dep); err != nil {
+			return err
+		}
 	}
+
+	if len(deps) == 0 {
+		v := &voter{
+			e:               e,
+			nodeID:          nodeID,
+			requestID:       requestID,
+			responseOptions: responseOptions,
+		}
+
+		if err := e.blocked.Schedule(ctx, v); err != nil {
+			return err
+		}
+	}
+
 	return e.executeDeferredWork(ctx)
 }
 
