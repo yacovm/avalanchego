@@ -24,23 +24,23 @@ import (
 const opLabel = "op"
 
 var (
-	_ common.Sender = (*sender)(nil)
+	_ common.Sender = (*Sender)(nil)
 
 	opLabels = []string{opLabel}
 )
 
-// sender is a wrapper around an ExternalSender.
+// Sender is a wrapper around an ExternalSender.
 // Messages to this node are put directly into [router] rather than
 // being sent over the network via the wrapped ExternalSender.
-// sender registers outbound requests with [router] so that [router]
+// Sender registers outbound requests with [router] so that [router]
 // fires a timeout if we don't get a response to the request.
-type sender struct {
+type Sender struct {
 	ctx        *snow.ConsensusContext
 	msgCreator message.OutboundMsgBuilder
 
 	sender   ExternalSender // Actually does the sending over the network
 	router   router.InternalHandler
-	timeouts timeout.Manager
+	Timeouts timeout.Manager
 
 	// Counts how many request have failed because the node was benched
 	failedDueToBench *prometheus.CounterVec // op
@@ -59,12 +59,12 @@ func New(
 	subnet subnets.Subnet,
 	reg prometheus.Registerer,
 ) (common.Sender, error) {
-	s := &sender{
+	s := &Sender{
 		ctx:        ctx,
 		msgCreator: msgCreator,
 		sender:     externalSender,
 		router:     router,
-		timeouts:   timeouts,
+		Timeouts:   timeouts,
 		failedDueToBench: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "failed_benched",
@@ -78,16 +78,16 @@ func New(
 	return s, reg.Register(s.failedDueToBench)
 }
 
-func (s *sender) SendGetStateSummaryFrontier(ctx context.Context, nodeIDs set.Set[ids.NodeID], requestID uint32) {
+func (s *Sender) SendGetStateSummaryFrontier(ctx context.Context, nodeIDs set.Set[ids.NodeID], requestID uint32) {
 	ctx = context.WithoutCancel(ctx)
 
 	// Note that this timeout duration won't exactly match the one that gets
 	// registered. That's OK.
-	deadline := s.timeouts.TimeoutDuration()
+	deadline := s.Timeouts.TimeoutDuration()
 
 	// Tell the router to expect a response message or a message notifying
 	// that we won't get a response from each of these nodes.
-	// We register timeouts for all nodes, regardless of whether we fail
+	// We register Timeouts for all nodes, regardless of whether we fail
 	// to send them a message, to avoid busy looping when disconnected from
 	// the internet.
 	for nodeID := range nodeIDs {
@@ -160,7 +160,7 @@ func (s *sender) SendGetStateSummaryFrontier(ctx context.Context, nodeIDs set.Se
 	}
 }
 
-func (s *sender) SendStateSummaryFrontier(ctx context.Context, nodeID ids.NodeID, requestID uint32, summary []byte) {
+func (s *Sender) SendStateSummaryFrontier(ctx context.Context, nodeID ids.NodeID, requestID uint32, summary []byte) {
 	ctx = context.WithoutCancel(ctx)
 
 	// Sending this message to myself.
@@ -222,16 +222,16 @@ func (s *sender) SendStateSummaryFrontier(ctx context.Context, nodeID ids.NodeID
 	}
 }
 
-func (s *sender) SendGetAcceptedStateSummary(ctx context.Context, nodeIDs set.Set[ids.NodeID], requestID uint32, heights []uint64) {
+func (s *Sender) SendGetAcceptedStateSummary(ctx context.Context, nodeIDs set.Set[ids.NodeID], requestID uint32, heights []uint64) {
 	ctx = context.WithoutCancel(ctx)
 
 	// Note that this timeout duration won't exactly match the one that gets
 	// registered. That's OK.
-	deadline := s.timeouts.TimeoutDuration()
+	deadline := s.Timeouts.TimeoutDuration()
 
 	// Tell the router to expect a response message or a message notifying
 	// that we won't get a response from each of these nodes.
-	// We register timeouts for all nodes, regardless of whether we fail
+	// We register Timeouts for all nodes, regardless of whether we fail
 	// to send them a message, to avoid busy looping when disconnected from
 	// the internet.
 	for nodeID := range nodeIDs {
@@ -307,7 +307,7 @@ func (s *sender) SendGetAcceptedStateSummary(ctx context.Context, nodeIDs set.Se
 	}
 }
 
-func (s *sender) SendAcceptedStateSummary(ctx context.Context, nodeID ids.NodeID, requestID uint32, summaryIDs []ids.ID) {
+func (s *Sender) SendAcceptedStateSummary(ctx context.Context, nodeID ids.NodeID, requestID uint32, summaryIDs []ids.ID) {
 	ctx = context.WithoutCancel(ctx)
 
 	if nodeID == s.ctx.NodeID {
@@ -359,16 +359,16 @@ func (s *sender) SendAcceptedStateSummary(ctx context.Context, nodeID ids.NodeID
 	}
 }
 
-func (s *sender) SendGetAcceptedFrontier(ctx context.Context, nodeIDs set.Set[ids.NodeID], requestID uint32) {
+func (s *Sender) SendGetAcceptedFrontier(ctx context.Context, nodeIDs set.Set[ids.NodeID], requestID uint32) {
 	ctx = context.WithoutCancel(ctx)
 
 	// Note that this timeout duration won't exactly match the one that gets
 	// registered. That's OK.
-	deadline := s.timeouts.TimeoutDuration()
+	deadline := s.Timeouts.TimeoutDuration()
 
 	// Tell the router to expect a response message or a message notifying
 	// that we won't get a response from each of these nodes.
-	// We register timeouts for all nodes, regardless of whether we fail
+	// We register Timeouts for all nodes, regardless of whether we fail
 	// to send them a message, to avoid busy looping when disconnected from
 	// the internet.
 	for nodeID := range nodeIDs {
@@ -441,7 +441,7 @@ func (s *sender) SendGetAcceptedFrontier(ctx context.Context, nodeIDs set.Set[id
 	}
 }
 
-func (s *sender) SendAcceptedFrontier(ctx context.Context, nodeID ids.NodeID, requestID uint32, containerID ids.ID) {
+func (s *Sender) SendAcceptedFrontier(ctx context.Context, nodeID ids.NodeID, requestID uint32, containerID ids.ID) {
 	ctx = context.WithoutCancel(ctx)
 
 	// Sending this message to myself.
@@ -494,16 +494,16 @@ func (s *sender) SendAcceptedFrontier(ctx context.Context, nodeID ids.NodeID, re
 	}
 }
 
-func (s *sender) SendGetAccepted(ctx context.Context, nodeIDs set.Set[ids.NodeID], requestID uint32, containerIDs []ids.ID) {
+func (s *Sender) SendGetAccepted(ctx context.Context, nodeIDs set.Set[ids.NodeID], requestID uint32, containerIDs []ids.ID) {
 	ctx = context.WithoutCancel(ctx)
 
 	// Note that this timeout duration won't exactly match the one that gets
 	// registered. That's OK.
-	deadline := s.timeouts.TimeoutDuration()
+	deadline := s.Timeouts.TimeoutDuration()
 
 	// Tell the router to expect a response message or a message notifying
 	// that we won't get a response from each of these nodes.
-	// We register timeouts for all nodes, regardless of whether we fail
+	// We register Timeouts for all nodes, regardless of whether we fail
 	// to send them a message, to avoid busy looping when disconnected from
 	// the internet.
 	for nodeID := range nodeIDs {
@@ -579,7 +579,7 @@ func (s *sender) SendGetAccepted(ctx context.Context, nodeIDs set.Set[ids.NodeID
 	}
 }
 
-func (s *sender) SendAccepted(ctx context.Context, nodeID ids.NodeID, requestID uint32, containerIDs []ids.ID) {
+func (s *Sender) SendAccepted(ctx context.Context, nodeID ids.NodeID, requestID uint32, containerIDs []ids.ID) {
 	ctx = context.WithoutCancel(ctx)
 
 	if nodeID == s.ctx.NodeID {
@@ -627,7 +627,7 @@ func (s *sender) SendAccepted(ctx context.Context, nodeID ids.NodeID, requestID 
 	}
 }
 
-func (s *sender) SendGetAncestors(ctx context.Context, nodeID ids.NodeID, requestID uint32, containerID ids.ID) {
+func (s *Sender) SendGetAncestors(ctx context.Context, nodeID ids.NodeID, requestID uint32, containerID ids.ID) {
 	ctx = context.WithoutCancel(ctx)
 
 	// Tell the router to expect a response message or a message notifying
@@ -657,18 +657,18 @@ func (s *sender) SendGetAncestors(ctx context.Context, nodeID ids.NodeID, reques
 
 	// [nodeID] may be benched. That is, they've been unresponsive so we don't
 	// even bother sending requests to them. We just have them immediately fail.
-	if s.timeouts.IsBenched(nodeID, s.ctx.ChainID) {
+	if s.Timeouts.IsBenched(nodeID, s.ctx.ChainID) {
 		s.failedDueToBench.With(prometheus.Labels{
 			opLabel: message.GetAncestorsOp.String(),
 		}).Inc()
-		s.timeouts.RegisterRequestToUnreachableValidator()
+		s.Timeouts.RegisterRequestToUnreachableValidator()
 		s.router.HandleInternal(ctx, inMsg)
 		return
 	}
 
 	// Note that this timeout duration won't exactly match the one that gets
 	// registered. That's OK.
-	deadline := s.timeouts.TimeoutDuration()
+	deadline := s.Timeouts.TimeoutDuration()
 	// Create the outbound message.
 	outMsg, err := s.msgCreator.GetAncestors(
 		s.ctx.ChainID,
@@ -709,12 +709,12 @@ func (s *sender) SendGetAncestors(ctx context.Context, nodeID ids.NodeID, reques
 			zap.Stringer("containerID", containerID),
 		)
 
-		s.timeouts.RegisterRequestToUnreachableValidator()
+		s.Timeouts.RegisterRequestToUnreachableValidator()
 		s.router.HandleInternal(ctx, inMsg)
 	}
 }
 
-func (s *sender) SendAncestors(_ context.Context, nodeID ids.NodeID, requestID uint32, containers [][]byte) {
+func (s *Sender) SendAncestors(_ context.Context, nodeID ids.NodeID, requestID uint32, containers [][]byte) {
 	// Create the outbound message.
 	outMsg, err := s.msgCreator.Ancestors(s.ctx.ChainID, requestID, containers)
 	if err != nil {
@@ -749,7 +749,7 @@ func (s *sender) SendAncestors(_ context.Context, nodeID ids.NodeID, requestID u
 	}
 }
 
-func (s *sender) SendGet(ctx context.Context, nodeID ids.NodeID, requestID uint32, containerID ids.ID) {
+func (s *Sender) SendGet(ctx context.Context, nodeID ids.NodeID, requestID uint32, containerID ids.ID) {
 	ctx = context.WithoutCancel(ctx)
 
 	// Tell the router to expect a response message or a message notifying
@@ -777,18 +777,18 @@ func (s *sender) SendGet(ctx context.Context, nodeID ids.NodeID, requestID uint3
 
 	// [nodeID] may be benched. That is, they've been unresponsive so we don't
 	// even bother sending requests to them. We just have them immediately fail.
-	if s.timeouts.IsBenched(nodeID, s.ctx.ChainID) {
+	if s.Timeouts.IsBenched(nodeID, s.ctx.ChainID) {
 		s.failedDueToBench.With(prometheus.Labels{
 			opLabel: message.GetOp.String(),
 		}).Inc()
-		s.timeouts.RegisterRequestToUnreachableValidator()
+		s.Timeouts.RegisterRequestToUnreachableValidator()
 		s.router.HandleInternal(ctx, inMsg)
 		return
 	}
 
 	// Note that this timeout duration won't exactly match the one that gets
 	// registered. That's OK.
-	deadline := s.timeouts.TimeoutDuration()
+	deadline := s.Timeouts.TimeoutDuration()
 	// Create the outbound message.
 	outMsg, err := s.msgCreator.Get(
 		s.ctx.ChainID,
@@ -829,12 +829,12 @@ func (s *sender) SendGet(ctx context.Context, nodeID ids.NodeID, requestID uint3
 			zap.Stringer("containerID", containerID),
 		)
 
-		s.timeouts.RegisterRequestToUnreachableValidator()
+		s.Timeouts.RegisterRequestToUnreachableValidator()
 		s.router.HandleInternal(ctx, inMsg)
 	}
 }
 
-func (s *sender) SendPut(_ context.Context, nodeID ids.NodeID, requestID uint32, container []byte) {
+func (s *Sender) SendPut(_ context.Context, nodeID ids.NodeID, requestID uint32, container []byte) {
 	// Create the outbound message.
 	outMsg, err := s.msgCreator.Put(s.ctx.ChainID, requestID, container)
 	if err != nil {
@@ -878,7 +878,7 @@ func (s *sender) SendPut(_ context.Context, nodeID ids.NodeID, requestID uint32,
 	}
 }
 
-func (s *sender) SendPushQuery(
+func (s *Sender) SendPushQuery(
 	ctx context.Context,
 	nodeIDs set.Set[ids.NodeID],
 	requestID uint32,
@@ -889,7 +889,7 @@ func (s *sender) SendPushQuery(
 
 	// Tell the router to expect a response message or a message notifying
 	// that we won't get a response from each of these nodes.
-	// We register timeouts for all nodes, regardless of whether we fail
+	// We register Timeouts for all nodes, regardless of whether we fail
 	// to send them a message, to avoid busy looping when disconnected from
 	// the internet.
 	for nodeID := range nodeIDs {
@@ -911,7 +911,7 @@ func (s *sender) SendPushQuery(
 
 	// Note that this timeout duration won't exactly match the one that gets
 	// registered. That's OK.
-	deadline := s.timeouts.TimeoutDuration()
+	deadline := s.Timeouts.TimeoutDuration()
 
 	// Sending a message to myself. No need to send it over the network. Just
 	// put it right into the router. Do so asynchronously to avoid deadlock.
@@ -932,12 +932,12 @@ func (s *sender) SendPushQuery(
 	// we don't even bother sending messages to them. We just have them
 	// immediately fail.
 	for nodeID := range nodeIDs {
-		if s.timeouts.IsBenched(nodeID, s.ctx.ChainID) {
+		if s.Timeouts.IsBenched(nodeID, s.ctx.ChainID) {
 			s.failedDueToBench.With(prometheus.Labels{
 				opLabel: message.PushQueryOp.String(),
 			}).Inc()
 			nodeIDs.Remove(nodeID)
-			s.timeouts.RegisterRequestToUnreachableValidator()
+			s.Timeouts.RegisterRequestToUnreachableValidator()
 
 			// Immediately register a failure. Do so asynchronously to avoid
 			// deadlock.
@@ -1004,7 +1004,7 @@ func (s *sender) SendPushQuery(
 			}
 
 			// Register failures for nodes we didn't send a request to.
-			s.timeouts.RegisterRequestToUnreachableValidator()
+			s.Timeouts.RegisterRequestToUnreachableValidator()
 			inMsg := message.InternalQueryFailed(
 				nodeID,
 				s.ctx.ChainID,
@@ -1015,7 +1015,7 @@ func (s *sender) SendPushQuery(
 	}
 }
 
-func (s *sender) SendPullQuery(
+func (s *Sender) SendPullQuery(
 	ctx context.Context,
 	nodeIDs set.Set[ids.NodeID],
 	requestID uint32,
@@ -1026,7 +1026,7 @@ func (s *sender) SendPullQuery(
 
 	// Tell the router to expect a response message or a message notifying
 	// that we won't get a response from each of these nodes.
-	// We register timeouts for all nodes, regardless of whether we fail
+	// We register Timeouts for all nodes, regardless of whether we fail
 	// to send them a message, to avoid busy looping when disconnected from
 	// the internet.
 	for nodeID := range nodeIDs {
@@ -1048,7 +1048,7 @@ func (s *sender) SendPullQuery(
 
 	// Note that this timeout duration won't exactly match the one that gets
 	// registered. That's OK.
-	deadline := s.timeouts.TimeoutDuration()
+	deadline := s.Timeouts.TimeoutDuration()
 
 	// Sending a message to myself. No need to send it over the network. Just
 	// put it right into the router. Do so asynchronously to avoid deadlock.
@@ -1069,12 +1069,12 @@ func (s *sender) SendPullQuery(
 	// unresponsive so we don't even bother sending messages to them. We just
 	// have them immediately fail.
 	for nodeID := range nodeIDs {
-		if s.timeouts.IsBenched(nodeID, s.ctx.ChainID) {
+		if s.Timeouts.IsBenched(nodeID, s.ctx.ChainID) {
 			s.failedDueToBench.With(prometheus.Labels{
 				opLabel: message.PullQueryOp.String(),
 			}).Inc()
 			nodeIDs.Remove(nodeID)
-			s.timeouts.RegisterRequestToUnreachableValidator()
+			s.Timeouts.RegisterRequestToUnreachableValidator()
 			// Immediately register a failure. Do so asynchronously to avoid
 			// deadlock.
 			inMsg := message.InternalQueryFailed(
@@ -1130,7 +1130,7 @@ func (s *sender) SendPullQuery(
 			)
 
 			// Register failures for nodes we didn't send a request to.
-			s.timeouts.RegisterRequestToUnreachableValidator()
+			s.Timeouts.RegisterRequestToUnreachableValidator()
 			inMsg := message.InternalQueryFailed(
 				nodeID,
 				s.ctx.ChainID,
@@ -1141,7 +1141,7 @@ func (s *sender) SendPullQuery(
 	}
 }
 
-func (s *sender) SendChits(
+func (s *Sender) SendChits(
 	ctx context.Context,
 	nodeID ids.NodeID,
 	requestID uint32,
@@ -1205,12 +1205,12 @@ func (s *sender) SendChits(
 	}
 }
 
-func (s *sender) SendAppRequest(ctx context.Context, nodeIDs set.Set[ids.NodeID], requestID uint32, appRequestBytes []byte) error {
+func (s *Sender) SendAppRequest(ctx context.Context, nodeIDs set.Set[ids.NodeID], requestID uint32, appRequestBytes []byte) error {
 	ctx = context.WithoutCancel(ctx)
 
 	// Tell the router to expect a response message or a message notifying
 	// that we won't get a response from each of these nodes.
-	// We register timeouts for all nodes, regardless of whether we fail
+	// We register Timeouts for all nodes, regardless of whether we fail
 	// to send them a message, to avoid busy looping when disconnected from
 	// the internet.
 	for nodeID := range nodeIDs {
@@ -1234,7 +1234,7 @@ func (s *sender) SendAppRequest(ctx context.Context, nodeIDs set.Set[ids.NodeID]
 
 	// Note that this timeout duration won't exactly match the one that gets
 	// registered. That's OK.
-	deadline := s.timeouts.TimeoutDuration()
+	deadline := s.Timeouts.TimeoutDuration()
 
 	// Sending a message to myself. No need to send it over the network. Just
 	// put it right into the router. Do so asynchronously to avoid deadlock.
@@ -1254,12 +1254,12 @@ func (s *sender) SendAppRequest(ctx context.Context, nodeIDs set.Set[ids.NodeID]
 	// unresponsive so we don't even bother sending messages to them. We just
 	// have them immediately fail.
 	for nodeID := range nodeIDs {
-		if s.timeouts.IsBenched(nodeID, s.ctx.ChainID) {
+		if s.Timeouts.IsBenched(nodeID, s.ctx.ChainID) {
 			s.failedDueToBench.With(prometheus.Labels{
 				opLabel: message.AppRequestOp.String(),
 			}).Inc()
 			nodeIDs.Remove(nodeID)
-			s.timeouts.RegisterRequestToUnreachableValidator()
+			s.Timeouts.RegisterRequestToUnreachableValidator()
 
 			// Immediately register a failure. Do so asynchronously to avoid
 			// deadlock.
@@ -1324,7 +1324,7 @@ func (s *sender) SendAppRequest(ctx context.Context, nodeIDs set.Set[ids.NodeID]
 			}
 
 			// Register failures for nodes we didn't send a request to.
-			s.timeouts.RegisterRequestToUnreachableValidator()
+			s.Timeouts.RegisterRequestToUnreachableValidator()
 			inMsg := message.InboundAppError(
 				nodeID,
 				s.ctx.ChainID,
@@ -1338,7 +1338,7 @@ func (s *sender) SendAppRequest(ctx context.Context, nodeIDs set.Set[ids.NodeID]
 	return nil
 }
 
-func (s *sender) SendAppResponse(ctx context.Context, nodeID ids.NodeID, requestID uint32, appResponseBytes []byte) error {
+func (s *Sender) SendAppResponse(ctx context.Context, nodeID ids.NodeID, requestID uint32, appResponseBytes []byte) error {
 	ctx = context.WithoutCancel(ctx)
 
 	if nodeID == s.ctx.NodeID {
@@ -1400,7 +1400,7 @@ func (s *sender) SendAppResponse(ctx context.Context, nodeID ids.NodeID, request
 	return nil
 }
 
-func (s *sender) SendAppError(ctx context.Context, nodeID ids.NodeID, requestID uint32, errorCode int32, errorMessage string) error {
+func (s *Sender) SendAppError(ctx context.Context, nodeID ids.NodeID, requestID uint32, errorCode int32, errorMessage string) error {
 	ctx = context.WithoutCancel(ctx)
 
 	if nodeID == s.ctx.NodeID {
@@ -1468,7 +1468,7 @@ func (s *sender) SendAppError(ctx context.Context, nodeID ids.NodeID, requestID 
 	return nil
 }
 
-func (s *sender) SendAppGossip(
+func (s *Sender) SendAppGossip(
 	_ context.Context,
 	config common.SendConfig,
 	appGossipBytes []byte,

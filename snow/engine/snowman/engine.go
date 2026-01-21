@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ava-labs/avalanchego/snow/networking/sender"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
@@ -897,14 +898,30 @@ func (e *Engine) sendQuery(
 		zap.Stringer("validators", e.Validators),
 	)
 
-	vdrIDs, err := e.Validators.Sample(e.Ctx.SubnetID, e.Params.K)
-	if err != nil {
-		e.Ctx.Log.Warn("dropped query for block",
-			zap.String("reason", "insufficient number of validators"),
-			zap.Stringer("blkID", blkID),
-			zap.Int("size", e.Params.K),
-		)
-		return
+	var c int
+
+	var vdrIDs []ids.NodeID
+	var err error
+
+	for c < e.Params.AlphaConfidence {
+		vdrIDs, err = e.Validators.Sample(e.Ctx.SubnetID, e.Params.K)
+		if err != nil {
+			e.Ctx.Log.Warn("dropped query for block",
+				zap.String("reason", "insufficient number of validators"),
+				zap.Stringer("blkID", blkID),
+				zap.Int("size", e.Params.K),
+			)
+			return
+		}
+
+		c = 0
+
+		for _, vdr := range vdrIDs {
+			if e.Sender.(*sender.Sender).Timeouts.IsBenched(vdr, e.Ctx.ChainID) {
+				continue
+			}
+			c++
+		}
 	}
 
 	_, lastAcceptedHeight := e.Consensus.LastAccepted()
