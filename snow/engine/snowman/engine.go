@@ -49,7 +49,7 @@ func cachedBlockSize(_ ids.ID, blk snowman.Block) int {
 type Engine struct {
 	Config
 	*metrics
-
+	FailedQueryStats
 	// list of NoOpsHandler for messages dropped by engine
 	common.StateSummaryFrontierHandler
 	common.AcceptedStateSummaryHandler
@@ -415,6 +415,7 @@ func (e *Engine) Chits(ctx context.Context, nodeID ids.NodeID, requestID uint32,
 }
 
 func (e *Engine) QueryFailed(ctx context.Context, nodeID ids.NodeID, requestID uint32) error {
+	defer e.FailedQueryStats.Inc(nodeID)
 	lastAcceptedID, lastAcceptedHeight, ok := e.acceptedFrontiers.LastAccepted(nodeID)
 	if ok {
 		return e.Chits(ctx, nodeID, requestID, lastAcceptedID, lastAcceptedID, lastAcceptedID, lastAcceptedHeight)
