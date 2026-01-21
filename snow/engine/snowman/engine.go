@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ava-labs/avalanchego/snow/networking/sender"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
@@ -904,6 +903,11 @@ func (e *Engine) sendQuery(
 	var vdrIDs []ids.NodeID
 	var err error
 
+	var lazyValidators set.Set[ids.NodeID]
+	if e.lazyValidators.Load() != nil {
+		lazyValidators = e.lazyValidators.Load().(set.Set[ids.NodeID])
+	}
+
 	for c < e.Params.AlphaConfidence {
 		vdrIDs, err = e.Validators.Sample(e.Ctx.SubnetID, e.Params.K)
 		if err != nil {
@@ -918,7 +922,7 @@ func (e *Engine) sendQuery(
 		c = 0
 
 		for _, vdr := range vdrIDs {
-			if e.Sender.(*sender.Sender).Timeouts.IsBenched(vdr, e.Ctx.ChainID) {
+			if lazyValidators.Contains(vdr) {
 				continue
 			}
 			c++

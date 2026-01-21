@@ -11,10 +11,11 @@ import (
 	"time"
 
 	"github.com/ava-labs/avalanchego/ids"
+	"github.com/ava-labs/avalanchego/utils/set"
 )
 
 type FailedQueryStats struct {
-	lock sync.RWMutex
+	lazyValidators atomic.Value
 	m    sync.Map
 	once sync.Once
 }
@@ -55,6 +56,16 @@ func (fqs *FailedQueryStats) printStats() {
 		sort.Slice(sorted, func(i, j int) bool {
 			return sorted[i].Value > sorted[j].Value
 		})
+
+		sorted = sorted[:10]
+
+		var lazy set.Set[ids.NodeID]
+		for _, kv := range sorted {
+			lazy.Add(kv.Key)
+		}
+
+		fqs.lazyValidators.Store(lazy)
+
 
 		fmt.Println("----------------------------------")
 		for _, kv := range sorted {
