@@ -908,7 +908,7 @@ func (e *Engine) sendQuery(
 		lazyValidators = e.lazyValidators.Load().(set.Set[ids.NodeID])
 	}
 
-	for c < e.Params.AlphaConfidence {
+	for c < e.Params.K {
 		vdrIDs, err = e.Validators.Sample(e.Ctx.SubnetID, e.Params.K)
 		if err != nil {
 			e.Ctx.Log.Warn("dropped query for block",
