@@ -16,45 +16,74 @@ import (
 
 type FailedQueryStats struct {
 	lazyValidators atomic.Value
-	m    sync.Map
-	once sync.Once
+	m              sync.Map
+	once           sync.Once
 }
 
-func (fqs *FailedQueryStats) Inc(nodeID ids.NodeID) {
+type queryStats struct {
+	success  uint64
+	failures uint64
+	benched  atomic.Bool
+}
+
+func (fqs *FailedQueryStats) Failed(nodeID ids.NodeID, benched bool) {
+	los := fqs.getQueryStats(nodeID)
+	atomic.AddUint64(&los.failures, 1)
+	los.benched.Store(benched)
+}
+
+func (fqs *FailedQueryStats) Succeeded(nodeID ids.NodeID) {
+	los := fqs.getQueryStats(nodeID)
+	atomic.AddUint64(&los.success, 1)
+}
+
+func (fqs *FailedQueryStats) getQueryStats(nodeID ids.NodeID) *queryStats {
 	fqs.once.Do(func() {
 		go func() {
 			fqs.printStats()
 		}()
 	})
-	var count uint64
-	loadedOrStored, _ := fqs.m.LoadOrStore(nodeID, &count)
-	los := loadedOrStored.(*uint64)
-	atomic.AddUint64(los, 1)
+	var stats queryStats
+	loadedOrStored, _ := fqs.m.LoadOrStore(nodeID, &stats)
+	los := loadedOrStored.(*queryStats)
+	return los
 }
 
 func (fqs *FailedQueryStats) printStats() {
 	for {
 		time.Sleep(time.Minute)
 		nodeIDsToFailedQueries := make(map[ids.NodeID]uint64)
+		nodeIDsToSuccessfulQueries := make(map[ids.NodeID]uint64)
+		benched := make(map[ids.NodeID]bool)
+
 		fqs.m.Range(func(key, value interface{}) bool {
-			v := value.(*uint64)
-			nodeIDsToFailedQueries[key.(ids.NodeID)] = atomic.LoadUint64(v)
+			stats := value.(*queryStats)
+			successes := atomic.LoadUint64(&stats.success)
+			failures := atomic.LoadUint64(&stats.failures)
+			if successes == 0 && failures == 0 {
+				return true
+			}
+			nodeIDsToFailedQueries[key.(ids.NodeID)] = failures
+			nodeIDsToSuccessfulQueries[key.(ids.NodeID)] = successes
+			benched[key.(ids.NodeID)] = stats.benched.Load()
 			return true
 		})
 
 		// Convert nodeIDsToFailedQueries to slice sorted by the number of failed queries
 		type kv struct {
-			Key   ids.NodeID
-			Value uint64
+			Key          ids.NodeID
+			FailureRatio int
+			SuccessRatio int
+			Benched      bool
 		}
 		var sorted []kv
 		for k, v := range nodeIDsToFailedQueries {
-			sorted = append(sorted, kv{k, v})
+			sorted = append(sorted, kv{Key: k, FailureRatio: int(v), SuccessRatio: int(nodeIDsToSuccessfulQueries[k]), Benched: benched[k]})
 		}
 
 		// Sort by Value in descending order
 		sort.Slice(sorted, func(i, j int) bool {
-			return sorted[i].Value > sorted[j].Value
+			return sorted[i].FailureRatio > sorted[j].FailureRatio
 		})
 
 		limit := min(len(sorted), 10)
@@ -67,10 +96,9 @@ func (fqs *FailedQueryStats) printStats() {
 
 		fqs.lazyValidators.Store(lazy)
 
-
 		fmt.Println("----------------------------------")
 		for _, kv := range sorted {
-			fmt.Printf("%s: %d\n", kv.Key, kv.Value)
+			fmt.Printf("%s: failures: %d, successes: %d, benched? %v\n", kv.Key, kv.FailureRatio, kv.SuccessRatio, kv.Benched)
 		}
 		fmt.Println("----------------------------------")
 	}
