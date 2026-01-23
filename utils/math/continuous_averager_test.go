@@ -4,11 +4,44 @@
 package math
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestF(t *testing.T) {
+	now := time.Now()
+
+	a := NewAverager(1, time.Second * 20, now)
+
+	for i := 0; i < 120; i++ {
+		now = now.Add(time.Second)
+		a.Observe(1, now)
+	}
+
+	for i := 0; i < 5; i++ {
+		now = now.Add(time.Second)
+		a.Observe(0, now)
+	}
+
+	fmt.Println(a.Read()) // 0.5
+
+	a = NewAverager(1, time.Second * 20, now)
+
+	for i := 0; i < 120; i++ {
+		now = now.Add(time.Second)
+		a.Observe(0, now)
+	}
+
+	for i := 0; i < 5; i++ {
+		now = now.Add(time.Second)
+		a.Observe(1, now)
+	}
+
+	fmt.Println(a.Read()) // 0.5
+}
 
 func TestAverager(t *testing.T) {
 	require := require.New(t)

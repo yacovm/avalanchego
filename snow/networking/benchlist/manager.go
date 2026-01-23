@@ -11,6 +11,8 @@ import (
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/snow"
 	"github.com/ava-labs/avalanchego/snow/validators"
+	"github.com/ava-labs/avalanchego/utils/set"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 var _ Manager = (*manager)(nil)
@@ -118,19 +120,51 @@ func (m *manager) RegisterChain(ctx *snow.ConsensusContext) error {
 		return err
 	}
 
-	benchlist, err := NewBenchlist(
-		ctx,
-		m.config.Benchable,
-		m.config.Validators,
-		m.config.Threshold,
-		m.config.MinimumFailingDuration,
-		m.config.Duration,
-		m.config.MaxPortion,
-		reg,
-	)
-	if err != nil {
+	numBenched := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "benched_num",
+		Help: "Number of currently benched validators",
+	})
+	weightBenched := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "benched_weight",
+		Help: "Weight of currently benched validators",
+	})
+
+	if err := reg.Register(numBenched); err != nil {
 		return err
 	}
+	if err := reg.Register(weightBenched); err != nil {
+		return err
+	}
+
+	benchlist := NewBenchList(BenchConfig{
+		IsBootstrapping: func() bool {
+			return ctx.State.Get().State != snow.NormalOp
+		},
+		Weight: func(id ids.NodeID) uint64 {
+			return m.config.Validators.GetWeight(ctx.SubnetID, id)
+		},
+		TotalWeight: func() (uint64, error) {
+			return m.config.Validators.TotalWeight(ctx.SubnetID)
+		},
+		SubsetWeight: func(validatorIDs set.Set[ids.NodeID]) (uint64, error) {
+			return m.config.Validators.SubsetWeight(ctx.SubnetID, validatorIDs)
+		},
+		OnBenchedOrUnbench: func(n int, stake int64) {
+			numBenched.Set(float64(n))
+			weightBenched.Set(float64(stake))
+		},
+		MaxAllowedBenchedStakePercent: m.config.MaxPortion,
+		Logger:                        ctx.Log,
+		ChainID:                       ctx.ChainID,
+		Time:                          time.Now,
+		BenchNotifier:                 m.config.Benchable,
+		BenchInitialCapacity:          64,
+		LongHistorySize:               120,
+		ShortThresholdTimePeriod:      30 * time.Second,
+		LongHistoryFailureThreshold:   20,
+		LongHistoryTimePeriod:         2 * time.Minute,
+		ScanFrequency:                 time.Second * 15,
+	})
 
 	m.chainBenchlists[ctx.ChainID] = benchlist
 	return nil

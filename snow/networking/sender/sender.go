@@ -936,7 +936,6 @@ func (s *sender) SendPushQuery(
 			s.failedDueToBench.With(prometheus.Labels{
 				opLabel: message.PushQueryOp.String(),
 			}).Inc()
-			nodeIDs.Remove(nodeID)
 			s.timeouts.RegisterRequestToUnreachableValidator()
 
 			// Immediately register a failure. Do so asynchronously to avoid
@@ -1073,7 +1072,6 @@ func (s *sender) SendPullQuery(
 			s.failedDueToBench.With(prometheus.Labels{
 				opLabel: message.PullQueryOp.String(),
 			}).Inc()
-			nodeIDs.Remove(nodeID)
 			s.timeouts.RegisterRequestToUnreachableValidator()
 			// Immediately register a failure. Do so asynchronously to avoid
 			// deadlock.
