@@ -25,24 +25,6 @@ type historyBasedBenching interface {
 	shouldBeBenched() bool
 }
 
-type benchingEnsamble struct {
-	a, b historyBasedBenching
-}
-
-func (b *benchingEnsamble) markFailure(t time.Time) {
-	b.a.markFailure(t)
-	b.b.markFailure(t)
-}
-
-func (b *benchingEnsamble) markSuccess(t time.Time) {
-	b.a.markSuccess(t)
-	b.b.markSuccess(t)
-}
-
-func (b *benchingEnsamble) shouldBeBenched() bool {
-	return b.a.shouldBeBenched() && b.b.shouldBeBenched()
-}
-
 type averagerBasedBenching struct {
 	unbenchThreshold float64
 	avg              math.Averager
@@ -89,12 +71,10 @@ func newNodeBenchStatus(nodeID ids.NodeID,
 		chainID:       chainid,
 		nodeID:        nodeID,
 		latestEvents:  NewFailureStats(historySize, shortPeriod),
-		history: &benchingEnsamble{
-			a: newLongTermStats(historySize, longPeriod, getTime, maxFailureThreshold),
-			b: &averagerBasedBenching{
-				unbenchThreshold: 0.7,
-				avg:              math.NewSyncAverager(math.NewAverager(1, 29*time.Second, getTime())),
-			},
+		//history:       newLongTermStats(historySize, longPeriod, getTime, maxFailureThreshold),
+		history: &averagerBasedBenching{
+			unbenchThreshold: 0.7,
+			avg:              math.NewSyncAverager(math.NewAverager(1, 29*time.Second, getTime())),
 		},
 	}
 }
