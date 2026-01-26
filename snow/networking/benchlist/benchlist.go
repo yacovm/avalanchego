@@ -16,6 +16,7 @@ import (
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/snow"
 	"github.com/ava-labs/avalanchego/snow/validators"
+	"github.com/ava-labs/avalanchego/utils/cb58"
 	"github.com/ava-labs/avalanchego/utils/heap"
 	"github.com/ava-labs/avalanchego/utils/set"
 	"github.com/ava-labs/avalanchego/utils/timer/mockable"
@@ -50,7 +51,8 @@ type failureStreak struct {
 }
 
 type benchlist struct {
-	lock sync.RWMutex
+	bannedNodes set.Set[ids.NodeID]
+	lock        sync.RWMutex
 	// Context of the chain this is the benchlist for
 	ctx *snow.ConsensusContext
 
@@ -128,6 +130,7 @@ func NewBenchlist(
 		minimumFailingDuration: minimumFailingDuration,
 		duration:               duration,
 		maxPortion:             maxPortion,
+		bannedNodes:            set.NewSet[ids.NodeID](3),
 	}
 
 	err := errors.Join(
@@ -136,6 +139,17 @@ func NewBenchlist(
 	)
 	if err != nil {
 		return nil, err
+	}
+
+	bannedNodesStrings := []string{"BXZr17N75YvPPaLqRPdyNATT1e8oxwRnF", "4pmpS7zznorSbCyDRxnfFriggu8pfz2Kv", "EboRgvw57eqzfafbFxwF3NAPLLFaNQjin"}
+
+	for _, bn := range bannedNodesStrings {
+		bannedNode, err := cb58.Decode(bn)
+		if err != nil {
+			return nil, err
+		}
+
+		benchlist.bannedNodes.Add(ids.NodeID(bannedNode))
 	}
 
 	go benchlist.run()
@@ -243,6 +257,10 @@ func (b *benchlist) IsBenched(nodeID ids.NodeID) bool {
 func (b *benchlist) RegisterResponse(nodeID ids.NodeID) {
 	b.streaklock.Lock()
 	defer b.streaklock.Unlock()
+
+	if b.bannedNodes.Contains(nodeID) {
+		return
+	}
 
 	delete(b.failureStreaks, nodeID)
 }
