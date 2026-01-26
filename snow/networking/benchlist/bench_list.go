@@ -234,14 +234,14 @@ func (bl *benchList) scan() {
 
 	for _, benchStatus := range bl.nodesToBenchStatus {
 		benchedByHistory := benchStatus.history.shouldBeBenched()
-		recentlyOnlyFailed := benchStatus.latestEvents.shouldBeBenched()
+		//recentlyOnlyFailed := benchStatus.latestEvents.shouldBeBenched()
 
 		if benchedNodes.Contains(benchStatus.nodeID) {
-			if !benchedByHistory && !recentlyOnlyFailed {
+			if !benchedByHistory { //&& !recentlyOnlyFailed {
 				unbenchedNodes = append(unbenchedNodes, benchStatus.nodeID)
 			}
 		} else {
-			if benchedByHistory || recentlyOnlyFailed {
+			if benchedByHistory { //|| recentlyOnlyFailed {
 				benchedCandidates = append(benchedCandidates, benchStatus.nodeID)
 				successByNode[benchStatus.nodeID] = benchStatus.history.successRate()
 				fmt.Println(">>>> Success rate for", benchStatus.nodeID, "is", successByNode[benchStatus.nodeID])
