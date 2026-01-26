@@ -56,6 +56,7 @@ type nodeBenchStatus struct {
 	latestEvents  historyBasedBenching
 	benched       atomic.Bool
 	canBench      func() bool
+	events        atomic.Uint64
 }
 
 func newNodeBenchStatus(nodeID ids.NodeID,
@@ -94,11 +95,13 @@ func (bns *nodeBenchStatus) unbench() {
 }
 
 func (bns *nodeBenchStatus) markFailure(t time.Time) {
+	bns.events.Add(1)
 	bns.history.markFailure(t)
 	bns.latestEvents.markFailure(t)
 }
 
 func (bns *nodeBenchStatus) markSuccess(t time.Time) {
+	bns.events.Add(1)
 	bns.history.markSuccess(t)
 	bns.latestEvents.markFailure(t)
 }
@@ -228,31 +231,40 @@ func (bl *benchList) scan() {
 	var benchedCandidates []ids.NodeID
 	var unbenchedNodes []ids.NodeID
 
-	successByNode := make(map[ids.NodeID]float64)
+	eventCountByNode := make(map[ids.NodeID]uint64)
 
 	benchedNodes := bl.benchedNodes.Load().(set.Set[ids.NodeID])
 
 	for _, benchStatus := range bl.nodesToBenchStatus {
-		benchedByHistory := benchStatus.history.shouldBeBenched()
-		//recentlyOnlyFailed := benchStatus.latestEvents.shouldBeBenched()
+		benchedByHistory := benchStatus.history.shouldBeBenched() && benchStatus.events.Load() > 100
+		// recentlyOnlyFailed := benchStatus.latestEvents.shouldBeBenched()
 
 		if benchedNodes.Contains(benchStatus.nodeID) {
 			if !benchedByHistory { //&& !recentlyOnlyFailed {
 				unbenchedNodes = append(unbenchedNodes, benchStatus.nodeID)
 			}
+			fmt.Println(">>>> event count for benched node", benchStatus.nodeID, "is", eventCountByNode[benchStatus.nodeID])
 		} else {
 			if benchedByHistory { //|| recentlyOnlyFailed {
 				benchedCandidates = append(benchedCandidates, benchStatus.nodeID)
-				successByNode[benchStatus.nodeID] = benchStatus.history.successRate()
-				fmt.Println(">>>> Success rate for", benchStatus.nodeID, "is", successByNode[benchStatus.nodeID])
+				eventCountByNode[benchStatus.nodeID] = benchStatus.events.Load()
+				fmt.Println(">>>> event count for unbenched node", benchStatus.nodeID, "is", eventCountByNode[benchStatus.nodeID])
 			}
 		}
 	}
 
-	// Sort the benched candidate nodes by their success rate
+	// Sort the benched candidate nodes by their events
 	sort.Slice(benchedCandidates, func(i, j int) bool {
-		return successByNode[benchedCandidates[i]] < successByNode[benchedCandidates[j]]
+		return eventCountByNode[benchedCandidates[i]] > eventCountByNode[benchedCandidates[j]]
 	})
+
+	// Pick only the top 10 heavy hitters
+	benchedCandidates = benchedCandidates[min(len(benchedCandidates), 10):]
+
+	fmt.Println(">>>> Going to try and bench the following nodes:")
+	for _, nodeID := range benchedCandidates {
+		fmt.Println(">>>> ", nodeID, eventCountByNode[nodeID])
+	}
 
 	benchedStake, totalStake, err := bl.computeBenchedStake()
 	if err != nil {
@@ -348,7 +360,7 @@ func (bl *benchList) computeBenchedStake() (uint64, uint64, error) {
 
 	benchedNodes := benchedVal.(set.Set[ids.NodeID])
 
-	fmt.Println(">>>> Total", benchedNodes.Len(), "nodes are benched")
+	fmt.Println(">>>> Total", benchedNodes.Len(), "nodes are benched", bl.config.ChainID)
 
 	benchedStake, err := bl.config.SubsetWeight(benchedNodes)
 	if err != nil {
