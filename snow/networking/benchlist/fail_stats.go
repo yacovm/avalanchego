@@ -14,6 +14,31 @@ type failureStats struct {
 	period time.Duration
 }
 
+func (fs *failureStats) successRate() float64 {
+	fs.lock.Lock()
+	defer fs.lock.Unlock()
+
+	var numSuccesses, numFailures int
+
+	fs.cbc.forEach(func(t time.Time, b bool) {
+		if t.IsZero() {
+			return
+		}
+
+		if b {
+			numSuccesses++
+		} else {
+			numFailures++
+		}
+	})
+
+	if numSuccesses == 0 && numFailures == 0 {
+		return 0
+	}
+
+	return float64(100*numSuccesses) / float64(numSuccesses+numFailures)
+}
+
 func NewFailureStats(size int, period time.Duration) *failureStats {
 	return &failureStats{cbc: eventCircularBuffer{buffer: make([]event, size)}, period: period}
 }

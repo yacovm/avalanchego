@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/ava-labs/avalanchego/ids"
+	"github.com/ava-labs/avalanchego/utils/cb58"
 	"github.com/ava-labs/avalanchego/utils/logging"
 	"github.com/ava-labs/avalanchego/utils/math"
 	"github.com/ava-labs/avalanchego/utils/set"
@@ -24,6 +25,14 @@ type historyBasedBenching interface {
 	markFailure(time.Time)
 	markSuccess(time.Time)
 	shouldBeBenched() bool
+	successRate() float64
+}
+
+var bannedNodesStrings = []string{
+	"BXZr17N75YvPPaLqRPdyNATT1e8oxwRnF",
+	"4pmpS7zznorSbCyDRxnfFriggu8pfz2Kv",
+	"EboRgvw57eqzfafbFxwF3NAPLLFaNQjin",
+	"HqeE7wcqkoZwhnwv6ADxudhZvoSH76pcw",
 }
 
 type averagerBasedBenching struct {
@@ -57,6 +66,7 @@ type nodeBenchStatus struct {
 	benched       atomic.Bool
 	canBench      func() bool
 	events        atomic.Uint64
+	successes     atomic.Uint64
 }
 
 func newNodeBenchStatus(nodeID ids.NodeID,
@@ -70,28 +80,14 @@ func newNodeBenchStatus(nodeID ids.NodeID,
 		nodeID:       nodeID,
 		latestEvents: NewFailureStats(historySize, shortPeriod),
 		history: &averagerBasedBenching{
-			unbenchThreshold: 0.7,
-			avg:              math.NewSyncAverager(math.NewAverager(1, 29*time.Second, getTime())),
+			unbenchThreshold: 0.5,
+			avg:              math.NewSyncAverager(math.NewAverager(1, time.Minute, getTime())),
 		},
 	}
 }
 
 func (bns *nodeBenchStatus) isBenched() bool {
 	return bns.benched.Load()
-}
-
-func (bns *nodeBenchStatus) bench() {
-	if !bns.canBenchMore(bns.nodeID) {
-		fmt.Println(">>>> wanted to bench", bns.nodeID, "but can't bench any more stake")
-		return
-	}
-	bns.benched.Store(true)
-	fmt.Println(">>>> Benched", bns.nodeID, "for", bns.chainID)
-}
-
-func (bns *nodeBenchStatus) unbench() {
-	bns.benched.Store(false)
-	fmt.Println(">>>> Un-Benched", bns.nodeID, "for", bns.chainID)
 }
 
 func (bns *nodeBenchStatus) markFailure(t time.Time) {
@@ -101,37 +97,10 @@ func (bns *nodeBenchStatus) markFailure(t time.Time) {
 }
 
 func (bns *nodeBenchStatus) markSuccess(t time.Time) {
+	bns.successes.Add(1)
 	bns.events.Add(1)
 	bns.history.markSuccess(t)
 	bns.latestEvents.markFailure(t)
-}
-
-func (bns *nodeBenchStatus) maybeBenchNode() bool {
-	benchedByHistory := bns.history.shouldBeBenched()
-	benchedByLatest := bns.latestEvents.shouldBeBenched()
-	if benchedByHistory || benchedByLatest {
-		fmt.Println(">>>> Benching", bns.nodeID, "for", bns.chainID, "because", benchedByHistory, benchedByLatest)
-		bns.bench()
-		return true
-	}
-	if benchedByHistory != benchedByLatest {
-		fmt.Println(">>>>>", bns.history.shouldBeBenched(), bns.latestEvents.shouldBeBenched())
-	}
-	return false
-}
-
-func (bns *nodeBenchStatus) maybeUnbenchNode() bool {
-	shouldNotBeBenchedByHistory := !bns.history.shouldBeBenched()
-	shouldNotBeBenchedByLatest := !bns.latestEvents.shouldBeBenched()
-	if shouldNotBeBenchedByHistory && shouldNotBeBenchedByLatest {
-		fmt.Println(">>>> UnBenching", bns.nodeID, "for", bns.chainID, "because", shouldNotBeBenchedByHistory, shouldNotBeBenchedByLatest)
-		bns.unbench()
-		return true
-	}
-	if shouldNotBeBenchedByHistory != shouldNotBeBenchedByLatest {
-		fmt.Println("<<<<<", !bns.history.shouldBeBenched(), !bns.latestEvents.shouldBeBenched())
-	}
-	return false
 }
 
 type BenchConfig struct {
@@ -227,29 +196,36 @@ func (bl *benchList) scan() {
 		return
 	}
 
-	var nodesToBench []ids.NodeID
+	delinquentNodes := set.NewSet[ids.NodeID](0)
+
+	for _, bn := range bannedNodesStrings {
+		bannedNode, err := cb58.Decode(bn)
+		if err != nil {
+			panic(err)
+		}
+
+		delinquentNodes.Add(ids.NodeID(bannedNode))
+	}
+
 	var benchedCandidates []ids.NodeID
-	var unbenchedNodes []ids.NodeID
 
 	eventCountByNode := make(map[ids.NodeID]uint64)
 
-	benchedNodes := bl.benchedNodes.Load().(set.Set[ids.NodeID])
-
 	for _, benchStatus := range bl.nodesToBenchStatus {
-		benchedByHistory := benchStatus.history.shouldBeBenched() && benchStatus.events.Load() > 100
-		// recentlyOnlyFailed := benchStatus.latestEvents.shouldBeBenched()
+		if delinquentNodes.Contains(benchStatus.nodeID) {
+			fmt.Println("Delinquent node", benchStatus.nodeID, "has", benchStatus.successes.Load(), "successes out of", benchStatus.events.Load(), "sucesses or failures")
+			benchStatus.latestEvents.shouldBeBenched()
+		}
+		benchedByHistory := benchStatus.history.shouldBeBenched()
+		// onlyFailed := benchStatus.latestEvents.shouldBeBenched()
+		eventCountByNode[benchStatus.nodeID] = benchStatus.events.Load()
 
-		if benchedNodes.Contains(benchStatus.nodeID) {
-			if !benchedByHistory { //&& !recentlyOnlyFailed {
-				unbenchedNodes = append(unbenchedNodes, benchStatus.nodeID)
-			}
-			fmt.Println(">>>> event count for benched node", benchStatus.nodeID, "is", eventCountByNode[benchStatus.nodeID])
-		} else {
-			if benchedByHistory { //|| recentlyOnlyFailed {
-				benchedCandidates = append(benchedCandidates, benchStatus.nodeID)
-				eventCountByNode[benchStatus.nodeID] = benchStatus.events.Load()
-				fmt.Println(">>>> event count for unbenched node", benchStatus.nodeID, "is", eventCountByNode[benchStatus.nodeID], benchStatus.history.successRate())
-			}
+		if benchStatus.history.successRate() < 0.95 && !benchedByHistory {
+			fmt.Println(">>>> Node", benchStatus.nodeID, "has", benchStatus.history.successRate(), "success rate")
+		}
+
+		if benchedByHistory { //|| onlyFailed {
+			benchedCandidates = append(benchedCandidates, benchStatus.nodeID)
 		}
 	}
 
@@ -258,58 +234,90 @@ func (bl *benchList) scan() {
 		return eventCountByNode[benchedCandidates[i]] > eventCountByNode[benchedCandidates[j]]
 	})
 
-	// Pick only the top 10 heavy hitters
-	benchedCandidates = benchedCandidates[min(len(benchedCandidates), 10):]
-
-	fmt.Println(">>>> Going to try and bench the following nodes:")
-	for _, nodeID := range benchedCandidates {
-		fmt.Println(">>>> ", nodeID, eventCountByNode[nodeID])
+	// Sanity test: Ensure they are in decreasing order
+	for i := 0; i < len(benchedCandidates)-1; i++ {
+		if eventCountByNode[benchedCandidates[i]] < eventCountByNode[benchedCandidates[i+1]] {
+			panic("benched candidates are not in decreasing order")
+		}
 	}
+
+	// Pick only the top 10 heavy hitters
+	// limit := min(len(benchedCandidates), 10)
+	// benchedCandidates = benchedCandidates[:limit]
+	futureBenchedCandidates := set.Of(benchedCandidates...)
 
 	benchedStake, totalStake, err := bl.computeBenchedStake()
 	if err != nil {
 		bl.config.Logger.Error("error calculating benched stake", zap.Error(err))
 	}
 
-	// See how much stake we get back after unbenching the unbenched candidates
-	for _, unbenchedCandidate := range unbenchedNodes {
-		benchedStake, err = safemath.Sub(benchedStake, bl.config.Weight(unbenchedCandidate))
-		if err != nil {
-			bl.config.Logger.Error("overflow calculating benched stake, unbenched stake overflows", zap.Error(err))
-			return
-		}
-	}
+	previousBenchedNodes := bl.benchedNodes.Load().(set.Set[ids.NodeID])
 
-	// Remove all unbenched candidates from the benched set
-	for _, unbenchedNode := range unbenchedNodes {
-		fmt.Println(">>>> Removing", unbenchedNode, "from the benched set")
-		benchedNodes.Remove(unbenchedNode)
+	var unbenchedNodes []ids.NodeID
+	var alreadyBenchedNodes []ids.NodeID
+
+	// If the node was previously benched but isn't a candidate to be benched, mark it unbenched
+	for node := range previousBenchedNodes {
+		if !futureBenchedCandidates.Contains(node) {
+			unbenchedNodes = append(unbenchedNodes, node)
+			fmt.Println(">>>> Unbenching", node, "from the benched set")
+			benchedStake, err = safemath.Sub(benchedStake, bl.config.Weight(node))
+			if err != nil {
+				bl.config.Logger.Error("overflow calculating benched stake, unbenched stake overflows", zap.Error(err))
+				return
+			}
+		}
 	}
 
 	maxBenchedStake := uint64(float64(totalStake) * bl.config.MaxAllowedBenchedStakePercent)
 
-	for _, benchedCandidate := range benchedCandidates {
-		stakeOfNode := bl.config.Weight(benchedCandidate)
-		totalBenchedStakeIfAdded, err := safemath.Add(benchedStake, stakeOfNode)
-		if err != nil {
-			bl.config.Logger.Error("overflow calculating future benched stake, stake overflows", zap.Error(err))
-			return
-		}
-		if totalBenchedStakeIfAdded > maxBenchedStake {
-			continue
-		}
-		nodesToBench = append(nodesToBench, benchedCandidate)
-		benchedStake, err = safemath.Add(benchedStake, stakeOfNode)
-		if err != nil {
-			bl.config.Logger.Error("overflow calculating benched stake, total stake overflows", zap.Error(err))
-			return
-		}
-		benchedNodes.Add(benchedCandidate)
-		fmt.Println(">>>> Added", benchedCandidate, "to the benched set")
+	stakeRemainingToBeBenched, err := safemath.Sub(maxBenchedStake, benchedStake)
+	if err != nil {
+		bl.config.Logger.Error("overflow calculating max allowed stake to be benched, max allowed stake to be benched overflows", zap.Error(err))
+		return
 	}
 
-	bl.benchedNodes.Store(benchedNodes)
-	bl.config.OnBenchedOrUnbench(benchedNodes.Len(), int64(benchedStake))
+	var nodesToBench []ids.NodeID
+
+	fmt.Println("Iterating through", len(futureBenchedCandidates), "candidates to be benched")
+
+	for node := range futureBenchedCandidates {
+		// Node is already benched, skip it.
+		if previousBenchedNodes.Contains(node) {
+			alreadyBenchedNodes = append(alreadyBenchedNodes, node)
+			continue
+		}
+		stakeOfNode := bl.config.Weight(node)
+		if stakeOfNode > stakeRemainingToBeBenched {
+			fmt.Println(">>>> Will not bench", node, "because it has too much stake")
+			continue
+		}
+		stakeRemainingToBeBenched, err = safemath.Sub(stakeRemainingToBeBenched, stakeOfNode)
+		if err != nil {
+			bl.config.Logger.Error("overflow calculating stake remaining to be benched, total stake overflows", zap.Error(err))
+			return
+		}
+		benchedStake, err = safemath.Add(benchedStake, stakeOfNode)
+		if err != nil {
+			bl.config.Logger.Error("overflow calculating benched stake, benched stake overflows", zap.Error(err))
+			return
+		}
+
+		nodesToBench = append(nodesToBench, node)
+	}
+
+	newBenchedNodes := make([]ids.NodeID, 0, len(nodesToBench)+len(alreadyBenchedNodes))
+	newBenchedNodes = append(newBenchedNodes, alreadyBenchedNodes...)
+	newBenchedNodes = append(newBenchedNodes, nodesToBench...)
+
+	prevBenchedCount := previousBenchedNodes.Len()
+
+	bl.benchedNodes.Store(set.Of[ids.NodeID](newBenchedNodes...))
+	bl.config.OnBenchedOrUnbench(len(newBenchedNodes), int64(benchedStake))
+
+	fmt.Println(">>>>> benched node count changed from", prevBenchedCount, "to", len(newBenchedNodes))
+	fmt.Println("Previously benched nodes: ", previousBenchedNodes, "New benched nodes: ", nodesToBench,
+		"can bench", 100*stakeRemainingToBeBenched/totalStake, "percent of the total stake on chain", bl.config.ChainID)
 
 	go func() {
 		for _, benchedNode := range nodesToBench {
