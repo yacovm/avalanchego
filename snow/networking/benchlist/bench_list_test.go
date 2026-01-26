@@ -4,6 +4,7 @@
 package benchlist
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -11,10 +12,11 @@ import (
 )
 
 func TestComputeHalfLife(t *testing.T) {
-	halfLife, _ := FindHalfLife()
+	halfLife, threshold := FindHalfLife()
 	if halfLife == 0 {
 		t.Fatal("Could not find halfLife")
 	}
+	fmt.Println(halfLife, threshold)
 }
 
 func FindHalfLife() (time.Duration, float64) {
@@ -119,7 +121,7 @@ func evaluateHalfLife(halfLife time.Duration) (float64, bool) {
 
 	// We now find a threshold that satisfies all conditions
 
-	for threshold := 0.1; threshold < 1; threshold += 0.05 {
+	for threshold := 0.7; threshold < 1; threshold += 0.05 {
 
 		var foundConflict bool
 		for _, entry := range resultsAndExpectedBenchStatus {

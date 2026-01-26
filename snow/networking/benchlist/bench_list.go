@@ -49,7 +49,6 @@ type nodeBenchStatus struct {
 	nodeID        ids.NodeID
 	history       historyBasedBenching
 	latestEvents  historyBasedBenching
-	avgBench      averagerBasedBenching
 	benched       atomic.Bool
 	canBench      func() bool
 }
@@ -72,10 +71,10 @@ func newNodeBenchStatus(nodeID ids.NodeID,
 		chainID:       chainid,
 		nodeID:        nodeID,
 		latestEvents:  NewFailureStats(historySize, shortPeriod),
-		history:       newLongTermStats(historySize, longPeriod, getTime, maxFailureThreshold),
-		avgBench: averagerBasedBenching{
-			unbenchThreshold: 0.9,
-			avg:              math.NewSyncAverager(math.NewAverager(1, 5*time.Second, getTime())),
+		//history:       newLongTermStats(historySize, longPeriod, getTime, maxFailureThreshold),
+		history: &averagerBasedBenching{
+			unbenchThreshold: 0.7,
+			avg:              math.NewSyncAverager(math.NewAverager(1, 29*time.Second, getTime())),
 		},
 	}
 }
