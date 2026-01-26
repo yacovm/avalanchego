@@ -48,7 +48,7 @@ type nodeBenchStatus struct {
 	canBenchMore  func(ids.NodeID) bool
 	nodeID        ids.NodeID
 	history       historyBasedBenching
-	//latestEvents  historyBasedBenching
+	latestEvents  historyBasedBenching
 	benched       atomic.Bool
 	canBench      func() bool
 }
@@ -70,7 +70,7 @@ func newNodeBenchStatus(nodeID ids.NodeID,
 		benchNotifier: benchNotifier,
 		chainID:       chainid,
 		nodeID:        nodeID,
-		//latestEvents:  NewFailureStats(historySize, shortPeriod),
+		latestEvents:  NewFailureStats(historySize, shortPeriod),
 		//history:       newLongTermStats(historySize, longPeriod, getTime, maxFailureThreshold),
 		history: &averagerBasedBenching{
 			unbenchThreshold: 0.7,
@@ -99,12 +99,12 @@ func (bns *nodeBenchStatus) unbench() {
 
 func (bns *nodeBenchStatus) markFailure(t time.Time) {
 	bns.history.markFailure(t)
-	//bns.latestEvents.markFailure(t)
+	bns.latestEvents.markFailure(t)
 }
 
 func (bns *nodeBenchStatus) markSuccess(t time.Time) {
 	bns.history.markSuccess(t)
-	//bns.latestEvents.markFailure(t)
+	bns.latestEvents.markFailure(t)
 }
 
 func (bns *nodeBenchStatus) maybeBenchNode() bool {
@@ -112,29 +112,29 @@ func (bns *nodeBenchStatus) maybeBenchNode() bool {
 		return false
 	}
 	benchedByHistory := bns.history.shouldBeBenched()
-	//benchedByLatest := bns.latestEvents.shouldBeBenched()
-	if benchedByHistory { //|| benchedByLatest {
-	//	fmt.Println(">>>> Benching", bns.nodeID, "for", bns.chainID, "because", benchedByHistory, benchedByLatest)
+	benchedByLatest := bns.latestEvents.shouldBeBenched()
+	if benchedByHistory || benchedByLatest {
+		fmt.Println(">>>> Benching", bns.nodeID, "for", bns.chainID, "because", benchedByHistory, benchedByLatest)
 		bns.bench()
 		return true
 	}
-/*	if benchedByHistory != benchedByLatest {
+	if benchedByHistory != benchedByLatest {
 		fmt.Println(">>>>>", bns.history.shouldBeBenched(), bns.latestEvents.shouldBeBenched())
-	}*/
+	}
 	return false
 }
 
 func (bns *nodeBenchStatus) maybeUnbenchNode() bool {
 	shouldNotBeBenchedByHistory := !bns.history.shouldBeBenched()
-	//shouldNotBeBenchedByLatest := !bns.latestEvents.shouldBeBenched()
-	if shouldNotBeBenchedByHistory { //&& shouldNotBeBenchedByLatest {
-		//fmt.Println(">>>> UnBenching", bns.nodeID, "for", bns.chainID, "because", shouldNotBeBenchedByHistory, shouldNotBeBenchedByLatest)
+	shouldNotBeBenchedByLatest := !bns.latestEvents.shouldBeBenched()
+	if shouldNotBeBenchedByHistory && shouldNotBeBenchedByLatest {
+		fmt.Println(">>>> UnBenching", bns.nodeID, "for", bns.chainID, "because", shouldNotBeBenchedByHistory, shouldNotBeBenchedByLatest)
 		bns.unbench()
 		return true
 	}
-/*	if shouldNotBeBenchedByHistory != shouldNotBeBenchedByLatest {
+	if shouldNotBeBenchedByHistory != shouldNotBeBenchedByLatest {
 		fmt.Println("<<<<<", !bns.history.shouldBeBenched(), !bns.latestEvents.shouldBeBenched())
-	}*/
+	}
 	return false
 }
 
