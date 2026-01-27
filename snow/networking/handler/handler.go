@@ -443,20 +443,17 @@ func (h *handler) handleSyncMsg(ctx context.Context, msg Message) error {
 		// execution (may change during execution)
 		isNormalOp = h.ctx.State.Get().State == snow.NormalOp
 	)
-	{
-		fields := []zap.Field{
+	if h.ctx.Log.Enabled(logging.Verbo) {
+		h.ctx.Log.Verbo("forwarding sync message to consensus",
 			zap.Stringer("nodeID", nodeID),
 			zap.String("messageOp", op),
-		}
-		if requestID, ok := message.GetRequestID(body); ok {
-			fields = append(fields, zap.Uint32("requestID", requestID))
-		}
-		log := h.ctx.Log.Debug
-		if h.ctx.Log.Enabled(logging.Verbo) {
-			log = h.ctx.Log.Verbo
-			fields = append(fields, zap.Stringer("message", body))
-		}
-		log("forwarding sync message to consensus", fields...)
+			zap.Stringer("message", body),
+		)
+	} else {
+		h.ctx.Log.Debug("forwarding sync message to consensus",
+			zap.Stringer("nodeID", nodeID),
+			zap.String("messageOp", op),
+		)
 	}
 	h.resourceTracker.StartProcessing(nodeID, startTime)
 	h.ctx.Lock.Lock()
@@ -478,7 +475,7 @@ func (h *handler) handleSyncMsg(ctx context.Context, msg Message) error {
 		h.metrics.messageHandlingTime.With(labels).Add(float64(handlingTime))
 
 		msg.OnFinishedHandling()
-		h.ctx.Log.Verbo("finished handling sync message",
+		h.ctx.Log.Debug("finished handling sync message",
 			zap.String("messageOp", op),
 		)
 		if lockingTime+handlingTime > syncProcessingTimeWarnLimit && isNormalOp {
