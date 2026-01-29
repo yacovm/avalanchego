@@ -8,14 +8,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"go.uber.org/zap"
+
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/snow"
 	"github.com/ava-labs/avalanchego/snow/validators"
 	"github.com/ava-labs/avalanchego/utils/buffer"
 	"github.com/ava-labs/avalanchego/utils/math"
 	"github.com/ava-labs/avalanchego/utils/set"
-	"github.com/prometheus/client_golang/prometheus"
-	"go.uber.org/zap"
 )
 
 const (
@@ -133,6 +134,19 @@ func (b *benchlist) RegisterFailure(nodeID ids.NodeID) {
 			bench:  true,
 		})
 	}
+}
+
+func (b *benchlist) BenchedNodes() set.Set[ids.NodeID] {
+	b.lock.RLock()
+	defer b.lock.RUnlock()
+
+	var benched set.Set[ids.NodeID]
+	for nodeID := range b.nodes {
+		if b.nodes[nodeID].isBenched {
+			benched.Add(nodeID)
+		}
+	}
+	return benched
 }
 
 // IsBenched returns true if messages to [nodeID] should not be sent over the

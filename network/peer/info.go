@@ -25,3 +25,7 @@ type Info struct {
 	SupportedACPs  set.Set[uint32] `json:"supportedACPs"`
 	ObjectedACPs   set.Set[uint32] `json:"objectedACPs"`
 }
+
+type BenchedPeers struct {
+	BenchedByChains map[string][]string `json:"benchedByChains"`
+}

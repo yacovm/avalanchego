@@ -11,6 +11,7 @@ import (
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/snow"
 	"github.com/ava-labs/avalanchego/snow/validators"
+	"github.com/ava-labs/avalanchego/utils/set"
 )
 
 var _ Manager = (*manager)(nil)
@@ -37,6 +38,8 @@ type Manager interface {
 	// [nodeID] is benched. If called on an id.ShortID that does
 	// not map to a validator, it will return an empty array.
 	GetBenched(nodeID ids.NodeID) []ids.ID
+
+	GetBenchedNoes() map[ids.ID]set.Set[ids.NodeID]
 }
 
 // Config defines the configuration for a benchlist
@@ -84,6 +87,19 @@ func (m *manager) IsBenched(nodeID ids.NodeID, chainID ids.ID) bool {
 	}
 	isBenched := benchlist.IsBenched(nodeID)
 	return isBenched
+}
+
+func (m *manager) GetBenchedNoes() map[ids.ID]set.Set[ids.NodeID] {
+	m.lock.RLock()
+	defer m.lock.RUnlock()
+
+	res := make(map[ids.ID]set.Set[ids.NodeID])
+
+	for chainID := range m.chainBenchlists {
+		res[chainID] = m.chainBenchlists[chainID].BenchedNodes()
+	}
+
+	return res
 }
 
 // GetBenched returns an array of chainIDs where the specified
@@ -156,6 +172,10 @@ func (m *manager) RegisterFailure(chainID ids.ID, nodeID ids.NodeID) {
 }
 
 type noBenchlist struct{}
+
+func (b noBenchlist) GetBenchedNoes() map[ids.ID]set.Set[ids.NodeID] {
+	return nil
+}
 
 // NewNoBenchlist returns an empty benchlist that will never stop any queries
 func NewNoBenchlist() Manager {

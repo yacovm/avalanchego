@@ -242,8 +242,6 @@ type PeersArgs struct {
 
 type Peer struct {
 	peer.Info
-
-	Benched []string `json:"benched"`
 }
 
 // PeersReply are the results from calling Peers
@@ -252,6 +250,8 @@ type PeersReply struct {
 	NumPeers json.Uint64 `json:"numPeers"`
 	// Each element is a peer
 	Peers []Peer `json:"peers"`
+
+	BenchedPeers peer.BenchedPeers
 }
 
 // Peers returns the current peers this node is connected to. If nodeIDs are
@@ -265,21 +265,30 @@ func (i *Info) Peers(_ *http.Request, args *PeersArgs, reply *PeersReply) error 
 
 	peers := i.networking.PeerInfo(args.NodeIDs)
 	peerInfo := make([]Peer, len(peers))
-	for index, peer := range peers {
-		benchedIDs := i.benchlist.GetBenched(peer.ID)
-		benchedAliases := make([]string, len(benchedIDs))
-		for idx, id := range benchedIDs {
-			alias, err := i.chainManager.PrimaryAlias(id)
-			if err != nil {
-				return fmt.Errorf("failed to get primary alias for chain ID %s: %w", id, err)
-			}
-			benchedAliases[idx] = alias
+
+	benchedPeersByChain := make(map[string][]string)
+
+	for chainID, nodes := range i.benchlist.GetBenchedNoes() {
+		chainName, err := i.chainManager.PrimaryAlias(chainID)
+		if err != nil {
+			return fmt.Errorf("failed to get primary alias for chain ID %s: %w", chainID, err)
 		}
+
+		peersForChain := make([]string, 0, len(nodes))
+		for nodeID := range nodes {
+			peersForChain = append(peersForChain, nodeID.String())
+		}
+
+		benchedPeersByChain[chainName] = peersForChain
+	}
+
+	for index, peer := range peers {
 		peerInfo[index] = Peer{
-			Info:    peer,
-			Benched: benchedAliases,
+			Info: peer,
 		}
 	}
+
+	reply.BenchedPeers.BenchedByChains = benchedPeersByChain
 
 	reply.Peers = peerInfo
 	reply.NumPeers = json.Uint64(len(reply.Peers))
