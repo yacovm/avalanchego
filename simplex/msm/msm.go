@@ -59,8 +59,16 @@ type ApprovalsRetriever interface {
 	RetrieveApprovals() ValidatorSetApprovals
 }
 
+type SignatureVerifier interface {
+	VerifySignature(signature []byte, message []byte, publicKey []byte) error
+}
+
 type SignatureAggregator interface {
 	AggregateSignatures(signatures ...[]byte) ([]byte, error)
+}
+
+type KeyAggregator interface {
+	AggregateKeys(keys ...[]byte) ([]byte, error)
 }
 
 type Block interface {
@@ -107,6 +115,15 @@ const (
 	stateBuildBlockNormalOp
 	stateBuildCollectingApprovals
 	stateBuildBlockEpochSealed
+)
+
+type blockType uint8
+
+const (
+	blockTypeNormal blockType = iota
+	blockTypeTelock
+	blockTypeSealing
+	blockTypeNewEpoch
 )
 
 func (sm *StateMachine) BuildBlock(ctx context.Context, parentBlock StateMachineBlock, simplexMetadata, simplexBlacklist []byte) (*StateMachineBlock, error) {
@@ -159,8 +176,8 @@ func (sm *StateMachine) VerifyBlock(ctx context.Context, block *StateMachineBloc
 		return sm.verifyBlockZeroEpoch(ctx, block, prevBlock, seq-1)
 	case stateBuildBlockNormalOp:
 		return sm.verifyBlockNormalOp(ctx, block, prevBlock, seq-1)
-		// return sm.buildBlockNormalOp(ctx, parentBlock, simplexMetadata, simplexBlacklist)
 	case stateBuildCollectingApprovals:
+		return sm.verifyCollectingApprovals(ctx, block, prevBlock, seq-1)
 		// return sm.buildBlockCollectingApprovals(ctx, parentBlock, simplexMetadata, simplexBlacklist)
 	case stateBuildBlockEpochSealed:
 		return sm.verifyBlockNormalOp(ctx, block, prevBlock, seq-1)
@@ -210,7 +227,7 @@ func (sm *StateMachine) buildBlockNormalOp(ctx context.Context, parentBlock Stat
 	}
 
 	// If the validator set has changed, it's time to move to a new epoch.
-	// We do this by setting NextPChainReferenceHeight to the new P-chain height,
+	// We do this by setting NextPChainReferenceHeight to the new P-chain height
 	// and building a block without waiting indefinitely.
 	if !currentValidatorSet.Compare(newValidatorSet) {
 		newSimplexEpochInfo.NextPChainReferenceHeight = pChainHeight
@@ -234,33 +251,30 @@ func (sm *StateMachine) verifyBlockNormalOp(ctx context.Context, block *StateMac
 
 	prevSimplexEpochInfo := prevBlock.Metadata().SimplexEpochInfo
 
-	// We need to find out if the new block is within the old epoch.
-	if prevSimplexEpochInfo.SealingBlockSeq != 0 {
-		// If it's in the old epoch then it's either a sealing block, or a Telock.
-		if prevSimplexEpochInfo.EpochNumber == simplexEpochInfo.EpochNumber {
-			if prevSimplexEpochInfo.SealingBlockSeq == prevBlockSeq {
-				return sm.verifySealingBlock(ctx, block, prevBlock, prevBlockSeq)
-			}
-			return sm.verifyTelock(ctx, block, prevBlock, prevBlockSeq)
-
-		}
+	// The common case is that the previous block and the new block are in the same epoch.
+	if prevSimplexEpochInfo.EpochNumber == simplexEpochInfo.EpochNumber {
+		return sm.verifyMiddleBlock(ctx, block, prevBlock, prevBlockSeq)
 	}
 
-	protocolMD, err := simplex.ProtocolMetadataFromBytes(block.Metadata.SimplexProtocolMetadata)
-	if err != nil {
-		return fmt.Errorf("failed to parse protocol metadata: %w", err)
+	// Else, this block is in the edges of an epoch, either at the end or at the beginning.
+	// We will identify which one it is and verify accordingly.
+
+	// If the new block comes after a sealing block, then this block is a Telock.
+	// [ Sealing Block ] <-- [ New Block ]
+	if prevSimplexEpochInfo.BlockValidationDescriptor != nil {
+		return sm.verifyTelock(ctx, block, prevBlock, prevBlockSeq)
 	}
 
-	err = sm.verifyPChainHeight(prevBlock, simplexEpochInfo)
-	if err != nil {
-		return err
+	// Else, if the previous block has a sealing block sequence and is in the same epoch as this block,
+	// then this block has to be a Telock.
+	// [ Sealing Block ] <-- [ Prev block ] <-- [ New Block ]
+	if simplexEpochInfo.EpochNumber == prevSimplexEpochInfo.EpochNumber && prevSimplexEpochInfo.SealingBlockSeq != 0 {
+		return sm.verifyTelock(ctx, block, prevBlock, prevBlockSeq)
 	}
 
-	// Is this the first block of the epoch?
-	prevBlockEpoch := prevSimplexEpochInfo.EpochNumber
-
-	if block.InnerBlock == nil {
-		return nil
+	// This block is the first block of its epoch if the epoch number is the sealing block sequence of the previous epoch
+	if simplexEpochInfo.EpochNumber == prevSimplexEpochInfo.SealingBlockSeq {
+		return sm.verifyNewEpochBlock(ctx, block, prevBlock, prevBlockSeq)
 	}
 
 	return block.InnerBlock.Verify(ctx)
@@ -283,9 +297,27 @@ func (sm *StateMachine) verifySealingBlock(ctx context.Context, block *StateMach
 	if block == nil {
 		return fmt.Errorf("block is nil")
 	}
+
+	newBlockValidationDescriptor := block.Metadata.SimplexEpochInfo.BlockValidationDescriptor
+	prevBlockValidationDescriptor := prevBlock.Metadata().SimplexEpochInfo.BlockValidationDescriptor
 }
 
 func (sm *StateMachine) verifyTelock(ctx context.Context, block *StateMachineBlock, prevBlock Block, prevBlockSeq uint64) error {
+}
+
+func (sm *StateMachine) verifyNewEpochBlock(ctx context.Context, block *StateMachineBlock, prevBlock Block, prevBlockSeq uint64) error {
+}
+
+func (sm *StateMachine) verifyMiddleBlock(ctx context.Context, block *StateMachineBlock, prevBlock Block, prevBlockSeq uint64) error {
+}
+
+func (sm *StateMachine) verifyCollectingApprovals(ctx context.Context, block *StateMachineBlock, prevBlock Block, prevBlockSeq uint64) error {
+	// The new block can either be a sealing block or we are still collecting approvals.
+	prevBlockEpochInfo := prevBlock.Metadata().SimplexEpochInfo
+	if prevBlockEpochInfo.BlockValidationDescriptor != nil {
+		return sm.verifySealingBlock(ctx, block, prevBlock, prevBlockSeq)
+	}
+	return sm.verifyMiddleBlock(ctx, block, prevBlock, prevBlockSeq)
 }
 
 func (sm *StateMachine) verifyBlockZeroEpoch(ctx context.Context, block *StateMachineBlock, prevBlockMD Block, prevBlockSeq uint64) error {
@@ -384,7 +416,8 @@ func (sm *StateMachine) buildBlockCollectingApprovals(ctx context.Context, paren
 	approvalsFromPeers := sm.ApprovalsRetriever.RetrieveApprovals()
 	auxInfo := parentBlock.Metadata.AuxiliaryInfo
 	nextPChainHeight := parentBlock.Metadata.SimplexEpochInfo.NextPChainReferenceHeight
-	newApprovals, err := computeNewApprovals(newSimplexEpochInfo, auxInfo, approvalsFromPeers, nextPChainHeight, sm.SignatureAggregator, validators)
+	prevNextEpochApprovals := parentBlock.Metadata.SimplexEpochInfo.NextEpochApprovals
+	newApprovals, err := computeNewApprovals(prevNextEpochApprovals, auxInfo, approvalsFromPeers, nextPChainHeight, sm.SignatureAggregator, validators)
 	if err != nil {
 		return nil, err
 	}
@@ -422,13 +455,16 @@ func (sm *StateMachine) createSealingBlock(ctx context.Context, parentBlock Stat
 	simplexEpochInfo.NextEpochApprovals.Signature = newApprovals.signature
 
 	// If this is the sealing block, set the sealing block sequence.
-	if newApprovals.canSeal {
-		md, err := simplex.ProtocolMetadataFromBytes(parentBlock.Metadata.SimplexProtocolMetadata)
-		if err != nil {
-			return nil, err
-		}
-		simplexEpochInfo.SealingBlockSeq = md.Seq + 1
+	md, err := simplex.ProtocolMetadataFromBytes(parentBlock.Metadata.SimplexProtocolMetadata)
+	if err != nil {
+		return nil, err
 	}
+	simplexEpochInfo.SealingBlockSeq = md.Seq + 1
+	validators, err := sm.GetValidatorSet(simplexEpochInfo.NextPChainReferenceHeight)
+	if err != nil {
+		return nil, err
+	}
+	simplexEpochInfo.BlockValidationDescriptor.AggregatedMembership.Members = validators
 
 	// If this is not the first epoch, and this is the sealing block, we set the hash of the previous sealing block.
 	if newApprovals.canSeal && simplexEpochInfo.EpochNumber > 0 {
@@ -443,7 +479,7 @@ func (sm *StateMachine) createSealingBlock(ctx context.Context, parentBlock Stat
 }
 
 func computeNewApprovals(
-	simplexEpochInfo SimplexEpochInfo,
+	nextEpochApprovals *NextEpochApprovals,
 	auxInfo *AuxiliaryInfo,
 	newApprovals ValidatorSetApprovals,
 	pChainHeight uint64,
@@ -465,10 +501,10 @@ func computeNewApprovals(
 		return approval.PChainHeight == pChainHeight && approval.AuxInfoSeqDigest == candidateAuxInfoDigest
 	})
 
-	if simplexEpochInfo.NextEpochApprovals == nil {
-		simplexEpochInfo.NextEpochApprovals = &NextEpochApprovals{}
+	if nextEpochApprovals == nil {
+		nextEpochApprovals = &NextEpochApprovals{}
 	}
-	existingApprovingNodes := set.BitsFromBytes(simplexEpochInfo.NextEpochApprovals.NodeIDs)
+	existingApprovingNodes := set.BitsFromBytes(nextEpochApprovals.NodeIDs)
 
 	newApprovals = newApprovals.Filter(func(i int, approval ValidatorSetApproval) bool {
 		approvingNodeIndexOfNewApprover := nodeID2ValidatorIndex[approval.NodeID]
@@ -489,7 +525,7 @@ func computeNewApprovals(
 	})
 
 	// Add the existing signature into the list of signatures to aggregate
-	existingSignature := simplexEpochInfo.NextEpochApprovals.Signature
+	existingSignature := nextEpochApprovals.Signature
 	newSignatures = append(newSignatures, existingSignature)
 
 	aggregatedSignature, err := aggregator.AggregateSignatures(newSignatures...)
