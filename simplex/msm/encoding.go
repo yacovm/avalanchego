@@ -4,8 +4,11 @@
 package metadata
 
 import (
-	"github.com/ava-labs/avalanchego/ids"
 	"slices"
+
+	"github.com/ava-labs/avalanchego/ids"
+
+	safemath "github.com/ava-labs/avalanchego/utils/math"
 )
 
 // go:generate go tool canoto encoding.go
@@ -100,8 +103,8 @@ type NextEpochApprovals struct {
 
 type NodeBLSMappings []NodeBLSMapping
 
-func (nbms NodeBLSMappings) TotalWeight() uint64 {
-	return nbms.Sum(func(int, NodeBLSMapping) bool {
+func (nbms NodeBLSMappings) TotalWeight() (uint64, error) {
+	return nbms.SumWeights(func(int, NodeBLSMapping) bool {
 		return true
 	})
 }
@@ -112,15 +115,19 @@ func (nbms NodeBLSMappings) ForEach(selector func(int, NodeBLSMapping)) {
 	}
 }
 
-func (nbms NodeBLSMappings) Sum(selector func(int, NodeBLSMapping) bool) uint64 {
+func (nbms NodeBLSMappings) SumWeights(selector func(int, NodeBLSMapping) bool) (uint64, error) {
 	var total uint64
-
+	var err error
 	nbms.ForEach(func(i int, nbm NodeBLSMapping) {
+		if err != nil {
+			return
+		}
 		if selector(i, nbm) {
+			total, err = safemath.Add(total, nbm.Weight)
 			total += nbm.Weight
 		}
 	})
-	return total
+	return total, err
 }
 
 func (nbms NodeBLSMappings) Compare(other NodeBLSMappings) bool {

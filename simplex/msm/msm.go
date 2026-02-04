@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"math"
 	"math/big"
 	"time"
 
@@ -106,6 +107,7 @@ type StateMachine struct {
 	GetBlock                 BlockRetriever
 	ApprovalsRetriever       ApprovalsRetriever
 	SignatureAggregator      SignatureAggregator
+	verifiers                []verifier
 }
 
 type state uint8
@@ -166,25 +168,28 @@ func (sm *StateMachine) VerifyBlock(ctx context.Context, block *StateMachineBloc
 		return fmt.Errorf("parent block (%d) has no inner block", seq-1)
 	}
 
-	prevState, err := sm.identifyCurrentState(prevBlock.Metadata().SimplexEpochInfo)
+	prevMD := prevBlock.Metadata()
+	currentState, err := sm.identifyCurrentState(prevMD.SimplexEpochInfo)
 	if err != nil {
 		return fmt.Errorf("failed to identify previous state: %w", err)
 	}
 
-	switch prevState {
+	switch currentState {
 	case stateFirstSimplexBlock:
-		return sm.verifyBlockZeroEpoch(ctx, block, prevBlock, seq-1)
-	case stateBuildBlockNormalOp:
-		return sm.verifyBlockNormalOp(ctx, block, prevBlock, seq-1)
-	case stateBuildCollectingApprovals:
-		return sm.verifyCollectingApprovals(ctx, block, prevBlock, seq-1)
-		// return sm.buildBlockCollectingApprovals(ctx, parentBlock, simplexMetadata, simplexBlacklist)
-	case stateBuildBlockEpochSealed:
-		return sm.verifyBlockNormalOp(ctx, block, prevBlock, seq-1)
+		err = sm.verifyBlockZero(ctx, block, prevBlock, seq-1)
 	default:
-		return fmt.Errorf("cannot identify state of previous block")
+		err = sm.verifyNonZeroBlock(block, prevBlock, prevMD, currentState)
 	}
+	return err
+}
 
+func (sm *StateMachine) verifyNonZeroBlock(block *StateMachineBlock, prevBlock Block, prevMD StateMachineMetadata, prevState state) error {
+	blockType := sm.identifyBlockType(block, prevBlock)
+	for _, verifier := range sm.verifiers {
+		if err := verifier.Verify(prevMD, block.Metadata, blockType, prevState); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -242,42 +247,39 @@ func (sm *StateMachine) buildBlockNormalOp(ctx context.Context, parentBlock Stat
 	return sm.wrapBlock(parentBlock, childBlock, newSimplexEpochInfo, pChainHeight, simplexMetadata, simplexBlacklist), nil
 }
 
-func (sm *StateMachine) verifyBlockNormalOp(ctx context.Context, block *StateMachineBlock, prevBlock Block, prevBlockSeq uint64) error {
-	if block == nil {
-		return fmt.Errorf("block is nil")
-	}
-
+func (sm *StateMachine) identifyBlockType(block *StateMachineBlock, prevBlock Block) blockType {
 	simplexEpochInfo := block.Metadata.SimplexEpochInfo
 
 	prevSimplexEpochInfo := prevBlock.Metadata().SimplexEpochInfo
 
-	// The common case is that the previous block and the new block are in the same epoch.
-	if prevSimplexEpochInfo.EpochNumber == simplexEpochInfo.EpochNumber {
-		return sm.verifyMiddleBlock(ctx, block, prevBlock, prevBlockSeq)
+	// Only sealing blocks carry block validation descriptors
+	if block.Metadata.SimplexEpochInfo.BlockValidationDescriptor != nil {
+		return blockTypeSealing
 	}
 
-	// Else, this block is in the edges of an epoch, either at the end or at the beginning.
-	// We will identify which one it is and verify accordingly.
+	// This block could be in the edges of an epoch, either at the end or at the beginning.
 
 	// If the new block comes after a sealing block, then this block is a Telock.
 	// [ Sealing Block ] <-- [ New Block ]
 	if prevSimplexEpochInfo.BlockValidationDescriptor != nil {
-		return sm.verifyTelock(ctx, block, prevBlock, prevBlockSeq)
+		return blockTypeTelock
 	}
 
 	// Else, if the previous block has a sealing block sequence and is in the same epoch as this block,
 	// then this block has to be a Telock.
 	// [ Sealing Block ] <-- [ Prev block ] <-- [ New Block ]
 	if simplexEpochInfo.EpochNumber == prevSimplexEpochInfo.EpochNumber && prevSimplexEpochInfo.SealingBlockSeq != 0 {
-		return sm.verifyTelock(ctx, block, prevBlock, prevBlockSeq)
+		return blockTypeTelock
 	}
 
 	// This block is the first block of its epoch if the epoch number is the sealing block sequence of the previous epoch
 	if simplexEpochInfo.EpochNumber == prevSimplexEpochInfo.SealingBlockSeq {
-		return sm.verifyNewEpochBlock(ctx, block, prevBlock, prevBlockSeq)
+		return blockTypeNewEpoch
 	}
 
-	return block.InnerBlock.Verify(ctx)
+	// Otherwise, we do not fall into any of these cases, so it's probably a block in the middle of the epoch,
+	// not in the edges.
+	return blockTypeNormal
 }
 
 func (sm *StateMachine) buildBlockZeroEpoch(ctx context.Context, parentBlock StateMachineBlock, simplexMetadata, simplexBlacklist []byte) (*StateMachineBlock, error) {
@@ -320,7 +322,7 @@ func (sm *StateMachine) verifyCollectingApprovals(ctx context.Context, block *St
 	return sm.verifyMiddleBlock(ctx, block, prevBlock, prevBlockSeq)
 }
 
-func (sm *StateMachine) verifyBlockZeroEpoch(ctx context.Context, block *StateMachineBlock, prevBlockMD Block, prevBlockSeq uint64) error {
+func (sm *StateMachine) verifyBlockZero(ctx context.Context, block *StateMachineBlock, prevBlockMD Block, prevBlockSeq uint64) error {
 	if block == nil {
 		return fmt.Errorf("block is nil")
 	}
@@ -533,16 +535,19 @@ func computeNewApprovals(
 		return nil, fmt.Errorf("failed to aggregate signatures: %w", err)
 	}
 
-	approvingWeight := validators.Sum(func(i int, nbm NodeBLSMapping) bool {
-		return newApprovingNodes.Contains(i)
-	})
+	approvingWeight, err := computeApprovingWeight(validators, newApprovingNodes)
+	if err != nil {
+		return nil, err
+	}
 
-	if validators.TotalWeight() == 0 {
-		return nil, fmt.Errorf("invalid simplex epoch info: total validator weight is 0")
+	totalWeight, err := computeTotalWeight(validators)
+	if err != nil {
+		return nil, err
 	}
 
 	threshold := big.NewRat(2, 3)
-	approvingRatio := big.NewRat(int64(approvingWeight), int64(validators.TotalWeight()))
+
+	approvingRatio := big.NewRat(approvingWeight, totalWeight)
 
 	canSeal := approvingRatio.Cmp(threshold) > 0
 
@@ -551,6 +556,22 @@ func computeNewApprovals(
 		signature: aggregatedSignature,
 		nodeIDs:   newApprovingNodes.Bytes(),
 	}, nil
+}
+
+func computeTotalWeight(validators NodeBLSMappings) (int64, error) {
+	totalWeight, err := validators.TotalWeight()
+	if err != nil {
+		return 0, fmt.Errorf("failed to sum weights of all nodes: %w", err)
+	}
+
+	if totalWeight == 0 {
+		return 0, fmt.Errorf("total weight of validators is 0")
+	}
+
+	if totalWeight > math.MaxInt64 {
+		return 0, fmt.Errorf("total weight of validators is too big, overflows int64: %d", totalWeight)
+	}
+	return int64(totalWeight), nil
 }
 
 func (sm *StateMachine) buildBlockEpochSealed(ctx context.Context, parentBlock StateMachineBlock, simplexMetadata, simplexBlacklist []byte) (*StateMachineBlock, error) {
