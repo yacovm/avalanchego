@@ -13,6 +13,7 @@ import (
 
 	"github.com/ava-labs/simplex"
 
+	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/upgrade"
 	"github.com/ava-labs/avalanchego/utils/set"
 
@@ -20,25 +21,25 @@ import (
 )
 
 type verificationInput struct {
-	prevMD        StateMachineMetadata
-	nextMD        StateMachineMetadata
-	nextTimestamp time.Time
-	hasChildBlock bool
-	nextBlockType blockType
-	state         state
+	prevMD                 StateMachineMetadata
+	proposedBlockMD        StateMachineMetadata
+	proposedBlockTimestamp time.Time
+	hasInnerBlock          bool
+	prevBlockSeq           uint64
+	nextBlockType          blockType
+	state                  state
 }
 
 type verifier interface {
 	Verify(in verificationInput) error
 }
-
 type validationDescriptorVerifier struct {
 	getValidatorSet ValidatorSetRetriever
 }
 
-func (vd *validationDescriptorVerifier) Verify(prevMD, nextMD StateMachineMetadata, nextBlockType blockType, state state) error {
-	prev, next := prevMD.SimplexEpochInfo, nextMD.SimplexEpochInfo
-	switch nextBlockType {
+func (vd *validationDescriptorVerifier) Verify(in verificationInput) error {
+	prev, next := in.prevMD.SimplexEpochInfo, in.proposedBlockMD.SimplexEpochInfo
+	switch in.nextBlockType {
 	case blockTypeSealing:
 		return vd.verifySealingBlock(prev, next)
 	default:
@@ -72,14 +73,14 @@ type nextEpochApprovalsVerifier struct {
 	keyAggregator   KeyAggregator
 }
 
-func (nv *nextEpochApprovalsVerifier) Verify(prevMD, nextMD StateMachineMetadata, nextBlockType blockType, state state) error {
-	prev, next := prevMD.SimplexEpochInfo, nextMD.SimplexEpochInfo
+func (nv *nextEpochApprovalsVerifier) Verify(in verificationInput) error {
+	prev, next := in.prevMD.SimplexEpochInfo, in.proposedBlockMD.SimplexEpochInfo
 
-	switch nextBlockType {
+	switch in.nextBlockType {
 	case blockTypeSealing:
-		return nv.verifySealingBlock(prev, next, nextMD.AuxiliaryInfo)
+		return nv.verifySealingBlock(prev, next, in.proposedBlockMD.AuxiliaryInfo)
 	case blockTypeNormal:
-		return nv.verifyNormal(prev, next, nextMD.AuxiliaryInfo)
+		return nv.verifyNormal(prev, next, in.proposedBlockMD.AuxiliaryInfo)
 	default:
 		return nv.verifyEmptyNextEpochApprovals(prev, next)
 	}
@@ -249,21 +250,21 @@ type nextPChainReferenceHeightVerifier struct {
 	getPChainHeight func() uint64
 }
 
-func (n *nextPChainReferenceHeightVerifier) Verify(prevMD, nextMD StateMachineMetadata, nextBlockType blockType, state state) error {
-	prev, next := prevMD.SimplexEpochInfo, nextMD.SimplexEpochInfo
-	switch nextBlockType {
+func (n *nextPChainReferenceHeightVerifier) Verify(in verificationInput) error {
+	prev, next := in.prevMD.SimplexEpochInfo, in.proposedBlockMD.SimplexEpochInfo
+	switch in.nextBlockType {
 	case blockTypeTelock, blockTypeSealing:
 		if prev.NextPChainReferenceHeight != next.NextPChainReferenceHeight {
 			return fmt.Errorf("expected P-chain reference height to be %d but got %d", prev.PChainReferenceHeight, next.PChainReferenceHeight)
 		}
 	case blockTypeNormal:
-		return n.verifyNextPChainHeightNormal(prevMD, prev, next)
+		return n.verifyNextPChainHeightNormal(in.prevMD, prev, next)
 	case blockTypeNewEpoch:
 		if next.NextPChainReferenceHeight != 0 {
 			return fmt.Errorf("expected P-chain reference height to be 0 but got %d", next.PChainReferenceHeight)
 		}
 	default:
-		return fmt.Errorf("unknown block type: %d", nextBlockType)
+		return fmt.Errorf("unknown block type: %d", in.nextBlockType)
 	}
 	return nil
 }
@@ -300,13 +301,18 @@ func (n *nextPChainReferenceHeightVerifier) verifyNextPChainHeightNormal(prevMD 
 
 type epochNumberVerifier struct{}
 
-func (e *epochNumberVerifier) Verify(prevMD, nextMD StateMachineMetadata, nextBlockType blockType, state state) error {
-	prev, next := prevMD.SimplexEpochInfo, nextMD.SimplexEpochInfo
+func (e *epochNumberVerifier) Verify(in verificationInput) error {
+	prev, next := in.prevMD.SimplexEpochInfo, in.proposedBlockMD.SimplexEpochInfo
+
+	if in.prevMD.SimplexEpochInfo.EpochNumber == 0 && in.proposedBlockMD.SimplexEpochInfo.EpochNumber != 1 {
+		return fmt.Errorf("expected epoch number of the first block created to be 1 but got %d", next.EpochNumber)
+	}
+
 	if prev.EpochNumber != next.EpochNumber {
 		return fmt.Errorf("expected epoch number to be %d but got %d", prev.EpochNumber, next.EpochNumber)
 	}
 
-	switch nextBlockType {
+	switch in.nextBlockType {
 	case blockTypeNewEpoch:
 		if prev.SealingBlockSeq != next.EpochNumber {
 			return fmt.Errorf("expected epoch number to be %d but got %d", prev.SealingBlockSeq, next.EpochNumber)
@@ -321,13 +327,13 @@ func (e *epochNumberVerifier) Verify(prevMD, nextMD StateMachineMetadata, nextBl
 
 type sealingBlockSeqVerifier struct{}
 
-func (s *sealingBlockSeqVerifier) Verify(prevMD, nextMD StateMachineMetadata, nextBlockType blockType, state state) error {
-	prev, next := prevMD.SimplexEpochInfo, nextMD.SimplexEpochInfo
+func (s *sealingBlockSeqVerifier) Verify(in verificationInput) error {
+	prev, next := in.prevMD.SimplexEpochInfo, in.proposedBlockMD.SimplexEpochInfo
 	if prev.SealingBlockSeq != next.SealingBlockSeq {
 		return fmt.Errorf("expected sealing block sequence number to be %d but got %d", prev.SealingBlockSeq, next.SealingBlockSeq)
 	}
 
-	switch nextBlockType {
+	switch in.nextBlockType {
 	case blockTypeNewEpoch, blockTypeNormal:
 		if next.SealingBlockSeq != 0 {
 			return fmt.Errorf("expected sealing block sequence number to be 0 but got %d", next.SealingBlockSeq)
@@ -337,7 +343,7 @@ func (s *sealingBlockSeqVerifier) Verify(prevMD, nextMD StateMachineMetadata, ne
 			return fmt.Errorf("expected sealing block sequence number to be %d but got %d", prev.SealingBlockSeq, next.SealingBlockSeq)
 		}
 	case blockTypeSealing:
-		md, err := simplex.ProtocolMetadataFromBytes(prevMD.SimplexProtocolMetadata)
+		md, err := simplex.ProtocolMetadataFromBytes(in.prevMD.SimplexProtocolMetadata)
 		if err != nil {
 			return fmt.Errorf("failed parsing protocol metadata: %w", err)
 		}
@@ -345,18 +351,38 @@ func (s *sealingBlockSeqVerifier) Verify(prevMD, nextMD StateMachineMetadata, ne
 			return fmt.Errorf("expected sealing block sequence number to be %d but got %d", md.Seq+1, next.SealingBlockSeq)
 		}
 	default:
-		return fmt.Errorf("unknown block type: %d", nextBlockType)
+		return fmt.Errorf("unknown block type: %d", in.nextBlockType)
 	}
 
 	return nil
 }
 
-type pChainHeightVerifier struct{}
+type pChainHeightVerifier struct {
+	getPChainHeight func() uint64
+}
 
-func (p *pChainHeightVerifier) Verify(prevMD, nextMD StateMachineMetadata, nextBlockType blockType, state state) error {
-	prev, next := prevMD.SimplexEpochInfo, nextMD.SimplexEpochInfo
+func (p *pChainHeightVerifier) Verify(in verificationInput) error {
+	currentPChainHeight := p.getPChainHeight()
 
-	switch nextBlockType {
+	if in.proposedBlockMD.PChainHeight > currentPChainHeight {
+		return fmt.Errorf("invalid P-chain reference height (%d) is too big, expected to be ≤ %d",
+			in.proposedBlockMD.PChainHeight, currentPChainHeight)
+	}
+
+	if in.prevMD.PChainHeight > in.proposedBlockMD.PChainHeight {
+		return fmt.Errorf("invalid P-chain height (%d) is smaller than parent block's P-chain height (%d)",
+			in.proposedBlockMD.PChainHeight, in.prevMD.PChainHeight)
+	}
+
+	return nil
+}
+
+type pChainReferenceHeightVerifier struct{}
+
+func (p *pChainReferenceHeightVerifier) Verify(in verificationInput) error {
+	prev, next := in.prevMD.SimplexEpochInfo, in.proposedBlockMD.SimplexEpochInfo
+
+	switch in.nextBlockType {
 	case blockTypeNewEpoch:
 		if prev.NextPChainReferenceHeight != next.PChainReferenceHeight {
 			return fmt.Errorf("expected P-chain reference height of the first block of epoch %d to be %d but got %d",
@@ -377,8 +403,96 @@ type icmEpochInfoVerifier struct {
 }
 
 func (i *icmEpochInfoVerifier) Verify(in verificationInput) error {
-	prevMD, nextMD := in.prevMD, in.nextMD
-	expectedICMInfo := nextICMEpochInfo(prevMD, in.hasChildBlock, i.getUpdates, i.computeICMEpoch, in.nextTimestamp)
-	icmInfo := nextMD.ICMEpochInfo
+	prevMD, nextMD := in.prevMD, in.proposedBlockMD
+	expectedICMInfo := nextICMEpochInfo(prevMD, in.hasInnerBlock, i.getUpdates, i.computeICMEpoch, in.proposedBlockTimestamp)
 
+	if !expectedICMInfo.Equal(&nextMD.ICMEpochInfo) {
+		return fmt.Errorf("expected ICM epoch info to be %v but got %v", expectedICMInfo, nextMD.ICMEpochInfo)
+	}
+
+	return nil
+}
+
+type timestampVerifier struct{}
+
+func (t *timestampVerifier) Verify(in verificationInput) error {
+	expectedTimestamp := in.proposedBlockTimestamp.Unix()
+	if expectedTimestamp != int64(in.proposedBlockMD.Timestamp) {
+		return fmt.Errorf("expected timestamp to be %d but got %d", expectedTimestamp, int64(in.proposedBlockMD.Timestamp))
+	}
+	return nil
+}
+
+type prevSealingBlockHashVerifier struct {
+	getBlock                 BlockRetriever
+	firstEverSimplexBlockSeq uint64
+}
+
+func (p *prevSealingBlockHashVerifier) Verify(in verificationInput) error {
+	prev, _ := in.prevMD.SimplexEpochInfo, in.proposedBlockMD.SimplexEpochInfo
+
+	if prev.EpochNumber == 1 && in.nextBlockType == blockTypeSealing {
+		block, _, err := p.getBlock(p.firstEverSimplexBlockSeq)
+		if err != nil {
+			return fmt.Errorf("failed retrieving first ever simplex block %d: %w", p.firstEverSimplexBlockSeq, err)
+		}
+
+		if in.proposedBlockMD.SimplexEpochInfo.PrevSealingBlockHash.Compare(block.Hash()) != 0 {
+			return fmt.Errorf("expected prev sealing block hash of the first ever simplex block to be %s but got %s", block.Hash(), in.proposedBlockMD.SimplexEpochInfo.PrevSealingBlockHash)
+		}
+
+		return nil
+	}
+
+	switch in.nextBlockType {
+	case blockTypeSealing:
+		prevSealingBlock, _, err := p.getBlock(in.prevMD.SimplexEpochInfo.EpochNumber)
+		if err != nil {
+			return fmt.Errorf("failed retrieving block: %w", err)
+		}
+		if in.proposedBlockMD.SimplexEpochInfo.PrevSealingBlockHash.Compare(prevSealingBlock.Hash()) != 0 {
+			return fmt.Errorf("expected prev sealing block hash to be %s but got %s", prevSealingBlock.Hash(), in.proposedBlockMD.SimplexEpochInfo.PrevSealingBlockHash)
+		}
+	default:
+		if in.proposedBlockMD.SimplexEpochInfo.PrevSealingBlockHash != ids.Empty {
+			return fmt.Errorf("expected prev sealing block hash of a non sealing block to be empty but got %s", prev.PrevSealingBlockHash)
+		}
+	}
+
+	return nil
+}
+
+type vmBlockSeqVerifier struct {
+	getBlock BlockRetriever
+}
+
+func (v *vmBlockSeqVerifier) Verify(in verificationInput) error {
+	prev, next := in.prevMD.SimplexEpochInfo, in.proposedBlockMD.SimplexEpochInfo
+
+	// If this is the first ever Simplex block, the PrevVMBlockSeq is simply the seq of the previous block.
+	if prev.EpochNumber == 0 {
+		if next.PrevVMBlockSeq != in.prevBlockSeq {
+			return fmt.Errorf("expected PrevVMBlockSeq to be %d but got %d", in.prevBlockSeq, next.PrevVMBlockSeq)
+		}
+		return nil
+	}
+
+	// Else, if the previous block has an inner block, we point to it.
+	// Otherwise, we point to the parent block's previous VM block seq.
+	prevBlock, _, err := v.getBlock(in.prevBlockSeq)
+	if err != nil {
+		return fmt.Errorf("failed retrieving block: %w", err)
+	}
+
+	expectedPrevVMBlockSeq := in.prevMD.SimplexEpochInfo.PrevVMBlockSeq
+
+	if prevBlock.HasInnerBlock() {
+		expectedPrevVMBlockSeq = in.prevBlockSeq
+	}
+
+	if next.PrevVMBlockSeq != expectedPrevVMBlockSeq {
+		return fmt.Errorf("expected PrevVMBlockSeq to be %d but got %d", expectedPrevVMBlockSeq, next.PrevVMBlockSeq)
+	}
+
+	return nil
 }

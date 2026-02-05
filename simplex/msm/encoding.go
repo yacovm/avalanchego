@@ -40,6 +40,13 @@ type ICMEpochInfo struct {
 	canotoData canotoData_ICMEpochInfo
 }
 
+func (ei *ICMEpochInfo) Equal(other *ICMEpochInfo) bool {
+	if other == nil {
+		return ei == nil
+	}
+	return ei.EpochStartTime == other.EpochStartTime && ei.EpochNumber == other.EpochNumber && ei.PChainEpochHeight == other.PChainEpochHeight
+}
+
 type AuxiliaryInfo struct {
 	Info           []byte `canoto:"bytes,1"`
 	PrevAuxInfoSeq uint64 `canoto:"uint,2"`

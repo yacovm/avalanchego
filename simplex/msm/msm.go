@@ -73,6 +73,8 @@ type KeyAggregator interface {
 }
 
 type Block interface {
+	Height() uint64
+
 	Hash() ids.ID
 
 	Metadata() StateMachineMetadata
@@ -107,7 +109,9 @@ type StateMachine struct {
 	GetBlock                 BlockRetriever
 	ApprovalsRetriever       ApprovalsRetriever
 	SignatureAggregator      SignatureAggregator
-	verifiers                []verifier
+
+	initialized bool
+	verifiers   []verifier
 }
 
 type state uint8
@@ -129,6 +133,8 @@ const (
 )
 
 func (sm *StateMachine) BuildBlock(ctx context.Context, parentBlock StateMachineBlock, simplexMetadata, simplexBlacklist []byte) (*StateMachineBlock, error) {
+	sm.maybeInit()
+
 	currentState, err := sm.identifyCurrentState(parentBlock.Metadata.SimplexEpochInfo)
 	if err != nil {
 		return nil, err
@@ -149,6 +155,8 @@ func (sm *StateMachine) BuildBlock(ctx context.Context, parentBlock StateMachine
 }
 
 func (sm *StateMachine) VerifyBlock(ctx context.Context, block *StateMachineBlock) error {
+	sm.maybeInit()
+
 	if block == nil {
 		return fmt.Errorf("block is nil")
 	}
@@ -183,10 +191,40 @@ func (sm *StateMachine) VerifyBlock(ctx context.Context, block *StateMachineBloc
 	return err
 }
 
+func (sm *StateMachine) maybeInit() {
+	if sm.initialized {
+		return
+	}
+	sm.init()
+	sm.initialized = true
+}
+
+func (sm *StateMachine) init() {
+	sm.verifiers = []verifier{
+		&icmEpochInfoVerifier{
+			computeICMEpoch: sm.ComputeICMEpoch,
+			getUpdates:      sm.GetUpgrades,
+		},
+		&pChainHeightVerifier{
+			getPChainHeight: sm.GetPChainHeight,
+		},
+		&timestampVerifier{},
+		&pChainReferenceHeightVerifier{},
+		&epochNumberVerifier{},
+		&prevSealingBlockHashVerifier{},
+		&nextPChainReferenceHeightVerifier{},
+		&vmBlockSeqVerifier{},
+		&validationDescriptorVerifier{},
+		&nextEpochApprovalsVerifier{},
+		&sealingBlockSeqVerifier{},
+		&sealingBlockSeqVerifier{},
+	}
+}
+
 func (sm *StateMachine) verifyNonZeroBlock(block *StateMachineBlock, prevBlock Block, prevMD StateMachineMetadata, prevState state) error {
-	blockType := sm.identifyBlockType(block, prevBlock)
+	// blockType := sm.identifyBlockType(block, prevBlock)
 	for _, verifier := range sm.verifiers {
-		if err := verifier.Verify(prevMD, block.Metadata, blockType, prevState); err != nil {
+		if err := verifier.Verify(verificationInput{}); err != nil {
 			return err
 		}
 	}
@@ -299,18 +337,19 @@ func (sm *StateMachine) verifySealingBlock(ctx context.Context, block *StateMach
 	if block == nil {
 		return fmt.Errorf("block is nil")
 	}
-
-	newBlockValidationDescriptor := block.Metadata.SimplexEpochInfo.BlockValidationDescriptor
-	prevBlockValidationDescriptor := prevBlock.Metadata().SimplexEpochInfo.BlockValidationDescriptor
+	return nil
 }
 
 func (sm *StateMachine) verifyTelock(ctx context.Context, block *StateMachineBlock, prevBlock Block, prevBlockSeq uint64) error {
+	return nil
 }
 
 func (sm *StateMachine) verifyNewEpochBlock(ctx context.Context, block *StateMachineBlock, prevBlock Block, prevBlockSeq uint64) error {
+	return nil
 }
 
 func (sm *StateMachine) verifyMiddleBlock(ctx context.Context, block *StateMachineBlock, prevBlock Block, prevBlockSeq uint64) error {
+	return nil
 }
 
 func (sm *StateMachine) verifyCollectingApprovals(ctx context.Context, block *StateMachineBlock, prevBlock Block, prevBlockSeq uint64) error {
@@ -334,12 +373,19 @@ func (sm *StateMachine) verifyBlockZero(ctx context.Context, block *StateMachine
 	}
 
 	if !prevBlockMD.HasInnerBlock() {
-		return fmt.Errorf("parent block (%d) has no inner block")
+		return fmt.Errorf("parent block (%d) has no inner block", prevBlockMD.Height())
 	}
 
-	err := sm.verifyPChainHeight(prevBlockMD, simplexEpochInfo)
-	if err != nil {
-		return err
+	currentPChainHeight := sm.GetPChainHeight()
+
+	if block.Metadata.PChainHeight > currentPChainHeight {
+		return fmt.Errorf("invalid P-chain height (%d) is too big, expected to be ≤ %d",
+			block.Metadata.PChainHeight, currentPChainHeight)
+	}
+
+	if prevBlockMD.Metadata().PChainHeight > block.Metadata.PChainHeight {
+		return fmt.Errorf("invalid P-chain height (%d) is smaller than parent block's P-chain height (%d)",
+			block.Metadata.PChainHeight, prevBlockMD.Metadata().PChainHeight)
 	}
 
 	expectedValidatorSet, err := sm.GetValidatorSet(simplexEpochInfo.PChainReferenceHeight)
@@ -368,22 +414,6 @@ func (sm *StateMachine) verifyBlockZero(ctx context.Context, block *StateMachine
 	}
 
 	return block.InnerBlock.Verify(ctx)
-}
-
-func (sm *StateMachine) verifyPChainHeight(prevBlockMD Block, simplexEpochInfo SimplexEpochInfo) error {
-	prevPChainHeight := prevBlockMD.Metadata().PChainHeight
-	currentPChainHeight := sm.GetPChainHeight()
-
-	if simplexEpochInfo.PChainReferenceHeight < prevPChainHeight {
-		return fmt.Errorf("invalid P-chain reference height (%d), should be at least parent block's P-chain height %d",
-			simplexEpochInfo.PChainReferenceHeight, prevPChainHeight)
-	}
-
-	if simplexEpochInfo.PChainReferenceHeight > currentPChainHeight {
-		return fmt.Errorf("invalid P-chain reference height (%d) is too big, expected to be ≤ %d",
-			simplexEpochInfo.PChainReferenceHeight, currentPChainHeight)
-	}
-	return nil
 }
 
 func constructSimplexEpochInfoForZeroEpoch(pChainHeight uint64, newValidatorSet NodeBLSMappings, PrevVMBlockSeq uint64) SimplexEpochInfo {
