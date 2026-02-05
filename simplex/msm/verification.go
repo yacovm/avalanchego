@@ -9,16 +9,27 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"time"
 
 	"github.com/ava-labs/simplex"
 
+	"github.com/ava-labs/avalanchego/upgrade"
 	"github.com/ava-labs/avalanchego/utils/set"
 
 	safemath "github.com/ava-labs/avalanchego/utils/math"
 )
 
+type verificationInput struct {
+	prevMD        StateMachineMetadata
+	nextMD        StateMachineMetadata
+	nextTimestamp time.Time
+	hasChildBlock bool
+	nextBlockType blockType
+	state         state
+}
+
 type verifier interface {
-	Verify(prevMD, nextMD StateMachineMetadata, nextBlockType blockType, state state) error
+	Verify(in verificationInput) error
 }
 
 type validationDescriptorVerifier struct {
@@ -338,4 +349,36 @@ func (s *sealingBlockSeqVerifier) Verify(prevMD, nextMD StateMachineMetadata, ne
 	}
 
 	return nil
+}
+
+type pChainHeightVerifier struct{}
+
+func (p *pChainHeightVerifier) Verify(prevMD, nextMD StateMachineMetadata, nextBlockType blockType, state state) error {
+	prev, next := prevMD.SimplexEpochInfo, nextMD.SimplexEpochInfo
+
+	switch nextBlockType {
+	case blockTypeNewEpoch:
+		if prev.NextPChainReferenceHeight != next.PChainReferenceHeight {
+			return fmt.Errorf("expected P-chain reference height of the first block of epoch %d to be %d but got %d",
+				prev.SealingBlockSeq, prev.NextPChainReferenceHeight, next.PChainReferenceHeight)
+		}
+	default:
+		if prev.PChainReferenceHeight != next.PChainReferenceHeight {
+			return fmt.Errorf("expected P-chain reference height to be %d but got %d", prev.PChainReferenceHeight, next.PChainReferenceHeight)
+		}
+	}
+
+	return nil
+}
+
+type icmEpochInfoVerifier struct {
+	getUpdates      func() upgrade.Config
+	computeICMEpoch ICMEpochTransition
+}
+
+func (i *icmEpochInfoVerifier) Verify(in verificationInput) error {
+	prevMD, nextMD := in.prevMD, in.nextMD
+	expectedICMInfo := nextICMEpochInfo(prevMD, in.hasChildBlock, i.getUpdates, i.computeICMEpoch, in.nextTimestamp)
+	icmInfo := nextMD.ICMEpochInfo
+
 }

@@ -621,10 +621,10 @@ func (sm *StateMachine) buildBlockEpochSealed(ctx context.Context, parentBlock S
 	return sm.wrapBlock(parentBlock, childBlock, newSimplexEpochInfo, parentBlock.Metadata.PChainHeight, simplexMetadata, simplexBlacklist), nil
 }
 
-func (sm *StateMachine) computeICMEpoch(parentMetadata StateMachineMetadata, parentTimestamp, childTimestamp time.Time) ICMEpoch {
-	upgrades := sm.GetUpgrades()
+func computeICMEpochInfo(getUpgrades func() upgrade.Config, icmEpochTransition ICMEpochTransition, parentMetadata StateMachineMetadata, parentTimestamp, childTimestamp time.Time) ICMEpoch {
+	upgrades := getUpgrades()
 
-	icmEpoch := sm.ComputeICMEpoch(upgrades, ICMEpochInput{
+	icmEpoch := icmEpochTransition(upgrades, ICMEpochInput{
 		ParentPChainHeight: parentMetadata.PChainHeight,
 		ParentTimestamp:    parentTimestamp,
 		ChildTimestamp:     childTimestamp,
@@ -638,23 +638,22 @@ func (sm *StateMachine) computeICMEpoch(parentMetadata StateMachineMetadata, par
 }
 
 func (sm *StateMachine) wrapBlock(parentBlock StateMachineBlock, childBlock snowman.Block, newSimplexEpochInfo SimplexEpochInfo, pChainHeight uint64, simplexMetadata, simplexBlacklist []byte) *StateMachineBlock {
-	icmEpochInfo := parentBlock.Metadata.ICMEpochInfo
-	timestamp := parentBlock.Metadata.Timestamp
+	parentMetadata := parentBlock.Metadata
+	timestamp := parentMetadata.Timestamp
 
-	if childBlock != nil {
-		parentTimestamp := time.Unix(int64(parentBlock.Metadata.Timestamp), 0)
-		newTimestamp := childBlock.Timestamp()
+	hasChildBlock := childBlock != nil
+	getUpgrades := sm.GetUpgrades
+	icmEpochTransition := sm.ComputeICMEpoch
+
+	newTimestamp := childBlock.Timestamp()
+	if hasChildBlock {
 		timestamp = uint64(newTimestamp.Unix())
-		icmEpoch := sm.computeICMEpoch(parentBlock.Metadata, parentTimestamp, newTimestamp)
-		icmEpochInfo = ICMEpochInfo{
-			EpochStartTime:    icmEpoch.EpochStartTime,
-			EpochNumber:       icmEpoch.EpochNumber,
-			PChainEpochHeight: icmEpoch.PChainEpochHeight,
-		}
 	}
 
+	icmEpochInfo := nextICMEpochInfo(parentMetadata, hasChildBlock, getUpgrades, icmEpochTransition, newTimestamp)
+
 	if parentBlock.InnerBlock == nil {
-		newSimplexEpochInfo.PrevVMBlockSeq = parentBlock.Metadata.SimplexEpochInfo.PrevVMBlockSeq
+		newSimplexEpochInfo.PrevVMBlockSeq = parentMetadata.SimplexEpochInfo.PrevVMBlockSeq
 	} else {
 		newSimplexEpochInfo.PrevVMBlockSeq = parentBlock.InnerBlock.Height()
 	}
@@ -670,6 +669,21 @@ func (sm *StateMachine) wrapBlock(parentBlock StateMachineBlock, childBlock snow
 			ICMEpochInfo:            icmEpochInfo,
 		},
 	}
+}
+
+func nextICMEpochInfo(parentMetadata StateMachineMetadata, hasChildBlock bool, getUpgrades func() upgrade.Config, icmEpochTransition ICMEpochTransition, newTimestamp time.Time) ICMEpochInfo {
+	icmEpochInfo := parentMetadata.ICMEpochInfo
+
+	if hasChildBlock {
+		parentTimestamp := time.Unix(int64(parentMetadata.Timestamp), 0)
+		icmEpoch := computeICMEpochInfo(getUpgrades, icmEpochTransition, parentMetadata, parentTimestamp, newTimestamp)
+		icmEpochInfo = ICMEpochInfo{
+			EpochStartTime:    icmEpoch.EpochStartTime,
+			EpochNumber:       icmEpoch.EpochNumber,
+			PChainEpochHeight: icmEpoch.PChainEpochHeight,
+		}
+	}
+	return icmEpochInfo
 }
 
 type approvals struct {
