@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"sort"
 	"time"
 
 	"github.com/ava-labs/simplex"
@@ -99,6 +100,7 @@ type BlockBuilder interface {
 }
 
 type StateMachine struct {
+	Height                   uint64
 	MaxBlockBuildingWaitTime time.Duration
 	ComputeICMEpoch          ICMEpochTransition
 	GetPChainHeight          func() uint64
@@ -109,9 +111,12 @@ type StateMachine struct {
 	GetBlock                 BlockRetriever
 	ApprovalsRetriever       ApprovalsRetriever
 	SignatureAggregator      SignatureAggregator
+	KeyAggregator            KeyAggregator
+	SignatureVerifier        SignatureVerifier
 
 	initialized bool
 	verifiers   []verifier
+	initErr     error
 }
 
 type state uint8
@@ -133,6 +138,9 @@ const (
 )
 
 func (sm *StateMachine) BuildBlock(ctx context.Context, parentBlock StateMachineBlock, simplexMetadata, simplexBlacklist []byte) (*StateMachineBlock, error) {
+	if sm.initErr != nil {
+		return nil, sm.initErr
+	}
 	sm.maybeInit()
 
 	currentState, err := sm.identifyCurrentState(parentBlock.Metadata.SimplexEpochInfo)
@@ -155,6 +163,10 @@ func (sm *StateMachine) BuildBlock(ctx context.Context, parentBlock StateMachine
 }
 
 func (sm *StateMachine) VerifyBlock(ctx context.Context, block *StateMachineBlock) error {
+	if sm.initErr != nil {
+		return sm.initErr
+	}
+
 	sm.maybeInit()
 
 	if block == nil {
@@ -186,7 +198,7 @@ func (sm *StateMachine) VerifyBlock(ctx context.Context, block *StateMachineBloc
 	case stateFirstSimplexBlock:
 		err = sm.verifyBlockZero(ctx, block, prevBlock, seq-1)
 	default:
-		err = sm.verifyNonZeroBlock(block, prevBlock, prevMD, currentState)
+		err = sm.verifyNonZeroBlock(block, prevBlock, prevMD, currentState, seq-1)
 	}
 	return err
 }
@@ -200,6 +212,12 @@ func (sm *StateMachine) maybeInit() {
 }
 
 func (sm *StateMachine) init() {
+	firstSimplexBlock, err := findFirstSimplexBlock(sm.GetBlock, sm.Height)
+	if err != nil {
+		sm.initErr = fmt.Errorf("failed to find first Simplex block: %w", err)
+		return
+	}
+
 	sm.verifiers = []verifier{
 		&icmEpochInfoVerifier{
 			computeICMEpoch: sm.ComputeICMEpoch,
@@ -211,20 +229,47 @@ func (sm *StateMachine) init() {
 		&timestampVerifier{},
 		&pChainReferenceHeightVerifier{},
 		&epochNumberVerifier{},
-		&prevSealingBlockHashVerifier{},
-		&nextPChainReferenceHeightVerifier{},
-		&vmBlockSeqVerifier{},
-		&validationDescriptorVerifier{},
-		&nextEpochApprovalsVerifier{},
-		&sealingBlockSeqVerifier{},
+		&prevSealingBlockHashVerifier{
+			getBlock:                 sm.GetBlock,
+			firstEverSimplexBlockSeq: firstSimplexBlock,
+		},
+		&nextPChainReferenceHeightVerifier{
+			getPChainHeight: sm.GetPChainHeight,
+			getValidatorSet: sm.GetValidatorSet,
+		},
+		&vmBlockSeqVerifier{
+			getBlock: sm.GetBlock,
+		},
+		&validationDescriptorVerifier{
+			getValidatorSet: sm.GetValidatorSet,
+		},
+		&nextEpochApprovalsVerifier{
+			getValidatorSet: sm.GetValidatorSet,
+			keyAggregator:   sm.KeyAggregator,
+			sigVerifier:     sm.SignatureVerifier,
+		},
 		&sealingBlockSeqVerifier{},
 	}
 }
 
-func (sm *StateMachine) verifyNonZeroBlock(block *StateMachineBlock, prevBlock Block, prevMD StateMachineMetadata, prevState state) error {
-	// blockType := sm.identifyBlockType(block, prevBlock)
+func (sm *StateMachine) verifyNonZeroBlock(block *StateMachineBlock, prevBlock Block, prevMD StateMachineMetadata, state state, prevSeq uint64) error {
+	blockType := sm.identifyBlockType(block, prevBlock)
+	timestamp := time.Unix(int64(prevMD.Timestamp), 0)
+
+	if block.InnerBlock != nil {
+		timestamp = block.InnerBlock.Timestamp()
+	}
+
 	for _, verifier := range sm.verifiers {
-		if err := verifier.Verify(verificationInput{}); err != nil {
+		if err := verifier.Verify(verificationInput{
+			proposedBlockMD:        block.Metadata,
+			nextBlockType:          blockType,
+			prevMD:                 prevMD,
+			state:                  state,
+			prevBlockSeq:           prevSeq,
+			hasInnerBlock:          block.InnerBlock != nil,
+			proposedBlockTimestamp: timestamp,
+		}); err != nil {
 			return err
 		}
 	}
@@ -331,34 +376,6 @@ func (sm *StateMachine) buildBlockZeroEpoch(ctx context.Context, parentBlock Sta
 	simplexEpochInfo := constructSimplexEpochInfoForZeroEpoch(pChainHeight, newValidatorSet, parentBlock.InnerBlock.Height())
 
 	return sm.buildBlockImpatiently(ctx, parentBlock, simplexMetadata, simplexBlacklist, simplexEpochInfo, pChainHeight)
-}
-
-func (sm *StateMachine) verifySealingBlock(ctx context.Context, block *StateMachineBlock, prevBlock Block, prevBlockSeq uint64) error {
-	if block == nil {
-		return fmt.Errorf("block is nil")
-	}
-	return nil
-}
-
-func (sm *StateMachine) verifyTelock(ctx context.Context, block *StateMachineBlock, prevBlock Block, prevBlockSeq uint64) error {
-	return nil
-}
-
-func (sm *StateMachine) verifyNewEpochBlock(ctx context.Context, block *StateMachineBlock, prevBlock Block, prevBlockSeq uint64) error {
-	return nil
-}
-
-func (sm *StateMachine) verifyMiddleBlock(ctx context.Context, block *StateMachineBlock, prevBlock Block, prevBlockSeq uint64) error {
-	return nil
-}
-
-func (sm *StateMachine) verifyCollectingApprovals(ctx context.Context, block *StateMachineBlock, prevBlock Block, prevBlockSeq uint64) error {
-	// The new block can either be a sealing block or we are still collecting approvals.
-	prevBlockEpochInfo := prevBlock.Metadata().SimplexEpochInfo
-	if prevBlockEpochInfo.BlockValidationDescriptor != nil {
-		return sm.verifySealingBlock(ctx, block, prevBlock, prevBlockSeq)
-	}
-	return sm.verifyMiddleBlock(ctx, block, prevBlock, prevBlockSeq)
 }
 
 func (sm *StateMachine) verifyBlockZero(ctx context.Context, block *StateMachineBlock, prevBlockMD Block, prevBlockSeq uint64) error {
@@ -714,6 +731,22 @@ func nextICMEpochInfo(parentMetadata StateMachineMetadata, hasChildBlock bool, g
 		}
 	}
 	return icmEpochInfo
+}
+
+func findFirstSimplexBlock(getBlock BlockRetriever, endHeight uint64) (uint64, error) {
+	firstSimplexBlock := sort.Search(int(endHeight+1), func(i int) bool {
+		block, _, err := getBlock(uint64(i))
+		if err != nil {
+			return false
+		}
+		return block.Metadata().SimplexEpochInfo.EpochNumber > 0
+	})
+
+	if uint64(firstSimplexBlock) > endHeight {
+		return 0, fmt.Errorf("no simplex blocks found in range [%d, %d]", 0, endHeight)
+	}
+
+	return uint64(firstSimplexBlock), nil
 }
 
 type approvals struct {
