@@ -758,7 +758,7 @@ func (n *network) track(ip *ips.ClaimedIPPort, trackAllSubnets bool) error {
 	}
 	n.trackedIPs[ip.NodeID] = tracked
 
-	if ip.AddrPort.String() == ips2.TrackedIP {
+	if strings.Contains(ip.AddrPort.String(), ips2.TrackedIP) {
 		fmt.Println(">>>> Dialing", ip.AddrPort.String())
 	}
 
@@ -920,6 +920,11 @@ func (n *network) dial(nodeID ids.NodeID, ip *trackedIP) {
 		zap.Stringer("nodeID", nodeID),
 		zap.Stringer("ip", ip.ip),
 	)
+
+	if strings.Contains(ip.ip.String(), ips2.TrackedIP) {
+		fmt.Println("Attempting to dial:", ip.ip.String())
+	}
+
 	go func() {
 		n.metrics.numTracked.Inc()
 		defer n.metrics.numTracked.Dec()
@@ -964,6 +969,9 @@ func (n *network) dial(nodeID ids.NodeID, ip *trackedIP) {
 			// "connection reset by peer" errors from interfering with the
 			// later duplicated connection check.
 			if connecting || connected {
+				if strings.Contains(ip.ip.String(), ips2.TrackedIP) {
+					fmt.Println("Already connected to:", ip.ip.String())
+				}
 				n.peerConfig.Log.Verbo(
 					"exiting attempt to dial peer",
 					zap.String("reason", "already connected"),
@@ -989,6 +997,9 @@ func (n *network) dial(nodeID ids.NodeID, ip *trackedIP) {
 			// rather than returning even though we will never initiate an
 			// outbound connection with this IP.
 			if !n.config.AllowPrivateIPs && !ips.IsPublic(ip.ip.Addr()) {
+				if strings.Contains(ip.ip.String(), ips2.TrackedIP) {
+					fmt.Println("Skipping private IP:", ip.ip.String())
+				}
 				n.peerConfig.Log.Verbo("skipping connection dial",
 					zap.String("reason", "outbound connections to private IPs are prohibited"),
 					zap.Stringer("nodeID", nodeID),
@@ -1000,6 +1011,9 @@ func (n *network) dial(nodeID ids.NodeID, ip *trackedIP) {
 
 			conn, err := n.dialer.Dial(n.onCloseCtx, ip.ip)
 			if err != nil {
+				if strings.Contains(ip.ip.String(), ips2.TrackedIP) {
+					fmt.Println("Dial failed:", err)
+				}
 				n.peerConfig.Log.Verbo(
 					"failed to reach peer, attempting again",
 					zap.Stringer("nodeID", nodeID),
@@ -1017,15 +1031,15 @@ func (n *network) dial(nodeID ids.NodeID, ip *trackedIP) {
 
 			err = n.upgrade(conn, n.clientUpgrader, false)
 			if err != nil {
+				if strings.Contains(ip.ip.String(), ips2.TrackedIP) {
+					fmt.Println("Failed to upgrade connection:", err)
+				}
 				n.peerConfig.Log.Verbo(
 					"failed to upgrade, attempting again",
 					zap.Stringer("nodeID", nodeID),
 					zap.Stringer("peerIP", ip.ip),
 					zap.Duration("delay", ip.delay),
 				)
-				if ip.ip.String() == ips2.TrackedIP {
-					fmt.Println(">>>>> failed to upgrade connection to", ip.ip.String())
-				}
 				continue
 			}
 			return
