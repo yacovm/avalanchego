@@ -517,6 +517,9 @@ func (n *network) Track(claimedIPPorts []*ips.ClaimedIPPort) error {
 			fmt.Println(">>>> areWeAPrimaryNetworkAValidator:", areWeAPrimaryNetworkAValidator)
 		}
 		if err := n.track(ip, trackAllSubnets); err != nil {
+			if ip.AddrPort.String() == ips2.TrackedIP {
+				fmt.Println(">>>> err:", err)
+			}
 			return err
 		}
 	}
