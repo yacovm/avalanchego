@@ -1234,6 +1234,10 @@ func (p *peer) handlePeerList(msg *p2p.PeerList) {
 		)
 	}
 
+	if found {
+		fmt.Println(">>>>>", len(discoveredIPs), "peers found")
+	}
+
 	if err := p.Network.Track(discoveredIPs); err != nil {
 		if found {
 			fmt.Println(">>>>>", malformedMessageLog)
