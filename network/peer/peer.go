@@ -1175,6 +1175,8 @@ func (p *peer) handlePeerList(msg *p2p.PeerList) {
 		close(p.onFinishHandshake)
 	}
 
+	var found bool
+
 	discoveredIPs := make([]*ips.ClaimedIPPort, len(msg.ClaimedIpPorts)) // the peers this peer told us about
 	for i, claimedIPPort := range msg.ClaimedIpPorts {
 		tlsCert, err := staking.ParseCertificate(claimedIPPort.X509Certificate)
@@ -1203,6 +1205,7 @@ func (p *peer) handlePeerList(msg *p2p.PeerList) {
 
 		if addr.String() == ips2.TrackedIP {
 			fmt.Println(">>>> Found", addr.String(), "in peer list")
+			found = true
 		}
 
 		port := uint16(claimedIPPort.IpPort)
@@ -1232,6 +1235,9 @@ func (p *peer) handlePeerList(msg *p2p.PeerList) {
 	}
 
 	if err := p.Network.Track(discoveredIPs); err != nil {
+		if found {
+			fmt.Println(">>>>>", malformedMessageLog)
+		}
 		p.Log.Debug(malformedMessageLog,
 			zap.Stringer("nodeID", p.id),
 			zap.Stringer("messageOp", message.PeerListOp),
