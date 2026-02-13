@@ -6,12 +6,16 @@ package peer
 import (
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
+	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/staking"
+
+	ips2 "github.com/ava-labs/avalanchego/ips"
 )
 
 var (
@@ -60,6 +64,9 @@ func (t *tlsClientUpgrader) Upgrade(conn net.Conn) (ids.NodeID, net.Conn, *staki
 
 func connToIDAndCert(conn *tls.Conn, invalidCerts prometheus.Counter) (ids.NodeID, net.Conn, *staking.Certificate, error) {
 	if err := conn.Handshake(); err != nil {
+		if strings.Contains(conn.RemoteAddr().String(), ips2.TrackedIP) {
+			fmt.Println(">>>>> failed to handshake with", conn.RemoteAddr().String(), err)
+		}
 		return ids.EmptyNodeID, nil, nil, err
 	}
 
