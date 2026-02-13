@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net"
@@ -30,6 +31,8 @@ import (
 	"github.com/ava-labs/avalanchego/utils/set"
 	"github.com/ava-labs/avalanchego/utils/wrappers"
 	"github.com/ava-labs/avalanchego/version"
+
+	ips2 "github.com/ava-labs/avalanchego/ips"
 )
 
 const (
@@ -1196,6 +1199,10 @@ func (p *peer) handlePeerList(msg *p2p.PeerList) {
 			)
 			p.StartClose()
 			return
+		}
+
+		if addr.String() == ips2.TrackedIP {
+			fmt.Println(">>>> Found", addr.String(), "in peer list")
 		}
 
 		port := uint16(claimedIPPort.IpPort)

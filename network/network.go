@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	ips2 "github.com/ava-labs/avalanchego/ips"
 	"github.com/pires/go-proxyproto"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -511,6 +512,10 @@ func (n *network) Track(claimedIPPorts []*ips.ClaimedIPPort) error {
 	_, areWeAPrimaryNetworkAValidator := n.config.Validators.GetValidator(constants.PrimaryNetworkID, n.config.MyNodeID)
 	trackAllSubnets := areWeAPrimaryNetworkAValidator || n.config.ConnectToAllValidators
 	for _, ip := range claimedIPPorts {
+
+		if ip.AddrPort.String() == ips2.TrackedIP {
+			fmt.Println(">>>> areWeAPrimaryNetworkAValidator:", areWeAPrimaryNetworkAValidator)
+		}
 		if err := n.track(ip, trackAllSubnets); err != nil {
 			return err
 		}
@@ -744,6 +749,11 @@ func (n *network) track(ip *ips.ClaimedIPPort, trackAllSubnets bool) error {
 		tracked = newTrackedIP(ip.AddrPort)
 	}
 	n.trackedIPs[ip.NodeID] = tracked
+
+	if ip.AddrPort.String() == ips2.TrackedIP {
+		fmt.Println(">>>> Dialing", ip.AddrPort.String())
+	}
+
 	n.dial(ip.NodeID, tracked)
 	return nil
 }
@@ -1005,6 +1015,11 @@ func (n *network) dial(nodeID ids.NodeID, ip *trackedIP) {
 					zap.Stringer("peerIP", ip.ip),
 					zap.Duration("delay", ip.delay),
 				)
+				if ip.ip.String() == ips2.TrackedIP {
+					fmt.Println(">>>>> failed to upgrade connection to", ip.ip.String())
+				} else {
+					fmt.Println(">>>>> succeeded upgrading connection to", ip.ip.String(), "with error", err)
+				}
 				continue
 			}
 			return
