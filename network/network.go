@@ -15,7 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	ips2 "github.com/ava-labs/avalanchego/ips"
 	"github.com/pires/go-proxyproto"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -39,6 +38,7 @@ import (
 	"github.com/ava-labs/avalanchego/utils/wrappers"
 	"github.com/ava-labs/avalanchego/version"
 
+	ips2 "github.com/ava-labs/avalanchego/ips"
 	safemath "github.com/ava-labs/avalanchego/utils/math"
 )
 
@@ -1097,6 +1097,11 @@ func (n *network) upgrade(conn net.Conn, upgrader peer.Upgrader, isIngress bool)
 		n.peersLock.Unlock()
 
 		_ = tlsConn.Close()
+
+		if conn.RemoteAddr().String() == ips2.TrackedIP {
+			fmt.Println(">>>>> dropping connection to", conn.RemoteAddr().String(), "because it is already connecting")
+		}
+
 		n.peerConfig.Log.Verbo(
 			"dropping connection",
 			zap.String("reason", "already connecting to peer"),
@@ -1109,6 +1114,11 @@ func (n *network) upgrade(conn net.Conn, upgrader peer.Upgrader, isIngress bool)
 		n.peersLock.Unlock()
 
 		_ = tlsConn.Close()
+
+		if conn.RemoteAddr().String() == ips2.TrackedIP {
+			fmt.Println(">>>>> dropping connection to", conn.RemoteAddr().String(), "because it is already connected")
+		}
+
 		n.peerConfig.Log.Verbo(
 			"dropping connection",
 			zap.String("reason", "already connected to peer"),
@@ -1120,6 +1130,10 @@ func (n *network) upgrade(conn net.Conn, upgrader peer.Upgrader, isIngress bool)
 	n.peerConfig.Log.Verbo("starting handshake",
 		zap.Stringer("nodeID", nodeID),
 	)
+
+	if conn.RemoteAddr().String() == ips2.TrackedIP {
+		fmt.Println(">>>>> starting handshake with", conn.RemoteAddr().String())
+	}
 
 	// peer.Start requires there is only ever one peer instance running with the
 	// same [peerConfig.InboundMsgThrottler]. This is guaranteed by the above
