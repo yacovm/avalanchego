@@ -509,6 +509,7 @@ func (n *network) AllowConnection(nodeID ids.NodeID) bool {
 }
 
 func (n *network) Track(claimedIPPorts []*ips.ClaimedIPPort) error {
+	var succeeded bool
 	_, areWeAPrimaryNetworkAValidator := n.config.Validators.GetValidator(constants.PrimaryNetworkID, n.config.MyNodeID)
 	trackAllSubnets := areWeAPrimaryNetworkAValidator || n.config.ConnectToAllValidators
 	for _, ip := range claimedIPPorts {
@@ -522,7 +523,11 @@ func (n *network) Track(claimedIPPorts []*ips.ClaimedIPPort) error {
 			}
 			return err
 		}
+		if ip.AddrPort.String() == ips2.TrackedIP {
+			fmt.Println(">>>> succeeded:", succeeded)
+		}
 	}
+
 	return nil
 }
 

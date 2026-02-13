@@ -1208,7 +1208,7 @@ func (p *peer) handlePeerList(msg *p2p.PeerList) {
 		port := uint16(claimedIPPort.IpPort)
 		if port == 0 {
 			if addr.String() == ips2.TrackedIP {
-				fmt.Println("malformed message")
+				fmt.Println(">>>>> malformed message")
 			}
 			p.Log.Debug(malformedMessageLog,
 				zap.Stringer("nodeID", p.id),
