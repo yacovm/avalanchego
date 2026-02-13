@@ -514,16 +514,16 @@ func (n *network) Track(claimedIPPorts []*ips.ClaimedIPPort) error {
 	trackAllSubnets := areWeAPrimaryNetworkAValidator || n.config.ConnectToAllValidators
 	for _, ip := range claimedIPPorts {
 
-		if ip.AddrPort.String() == ips2.TrackedIP {
+		if strings.Contains(ip.AddrPort.String(), ips2.TrackedIP) {
 			fmt.Println(">>>> areWeAPrimaryNetworkAValidator:", areWeAPrimaryNetworkAValidator)
 		}
 		if err := n.track(ip, trackAllSubnets); err != nil {
-			if ip.AddrPort.String() == ips2.TrackedIP {
+			if strings.Contains(ip.AddrPort.String(), ips2.TrackedIP) {
 				fmt.Println(">>>> err:", err)
 			}
 			return err
 		}
-		if ip.AddrPort.String() == ips2.TrackedIP {
+		if strings.Contains(ip.AddrPort.String(), ips2.TrackedIP) {
 			fmt.Println(">>>> succeeded:", succeeded)
 		}
 	}
