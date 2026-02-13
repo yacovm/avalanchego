@@ -1032,7 +1032,7 @@ func (n *network) dial(nodeID ids.NodeID, ip *trackedIP) {
 			err = n.upgrade(conn, n.clientUpgrader, false)
 			if err != nil {
 				if strings.Contains(ip.ip.String(), ips2.TrackedIP) {
-					fmt.Println("Failed to upgrade connection:", err)
+					fmt.Println(">>>> Failed to upgrade connection:", err)
 				}
 				n.peerConfig.Log.Verbo(
 					"failed to upgrade, attempting again",
@@ -1058,7 +1058,7 @@ func (n *network) dial(nodeID ids.NodeID, ip *trackedIP) {
 func (n *network) upgrade(conn net.Conn, upgrader peer.Upgrader, isIngress bool) error {
 	upgradeTimeout := n.peerConfig.Clock.Time().Add(n.config.ReadHandshakeTimeout)
 	if err := conn.SetReadDeadline(upgradeTimeout); err != nil {
-		if conn.RemoteAddr().String() == ips2.TrackedIP {
+		if strings.Contains(conn.RemoteAddr().String(), ips2.TrackedIP) {
 			fmt.Println(">>>>> failed to set read deadline on connection to", conn.RemoteAddr().String())
 		}
 		_ = conn.Close()
@@ -1070,7 +1070,7 @@ func (n *network) upgrade(conn net.Conn, upgrader peer.Upgrader, isIngress bool)
 
 	nodeID, tlsConn, cert, err := upgrader.Upgrade(conn)
 	if err != nil {
-		if conn.RemoteAddr().String() == ips2.TrackedIP {
+		if strings.Contains(conn.RemoteAddr().String(), ips2.TrackedIP) {
 			fmt.Println(">>>>> failed to upgrade connection to", conn.RemoteAddr().String())
 		}
 		_ = conn.Close()
@@ -1081,7 +1081,7 @@ func (n *network) upgrade(conn net.Conn, upgrader peer.Upgrader, isIngress bool)
 	}
 
 	if err := tlsConn.SetReadDeadline(time.Time{}); err != nil {
-		if conn.RemoteAddr().String() == ips2.TrackedIP {
+		if strings.Contains(conn.RemoteAddr().String(), ips2.TrackedIP) {
 			fmt.Println(">>>>> failed to clear read deadline on connection to", conn.RemoteAddr().String())
 		}
 		_ = tlsConn.Close()
@@ -1101,7 +1101,7 @@ func (n *network) upgrade(conn net.Conn, upgrader peer.Upgrader, isIngress bool)
 	}
 
 	if !n.AllowConnection(nodeID) {
-		if conn.RemoteAddr().String() == ips2.TrackedIP {
+		if strings.Contains(conn.RemoteAddr().String(), ips2.TrackedIP) {
 			fmt.Println("dropping undesired connection")
 		}
 		_ = tlsConn.Close()
@@ -1130,7 +1130,7 @@ func (n *network) upgrade(conn net.Conn, upgrader peer.Upgrader, isIngress bool)
 
 		_ = tlsConn.Close()
 
-		if conn.RemoteAddr().String() == ips2.TrackedIP {
+		if strings.Contains(conn.RemoteAddr().String(), ips2.TrackedIP) {
 			fmt.Println(">>>>> dropping connection to", conn.RemoteAddr().String(), "because it is already connecting")
 		}
 
@@ -1140,7 +1140,7 @@ func (n *network) upgrade(conn net.Conn, upgrader peer.Upgrader, isIngress bool)
 			zap.Stringer("nodeID", nodeID),
 		)
 
-		if conn.RemoteAddr().String() == ips2.TrackedIP {
+		if strings.Contains(conn.RemoteAddr().String(), ips2.TrackedIP) {
 			fmt.Println(">>>>> dropping connection to", conn.RemoteAddr().String(), "because it is already connecting")
 		}
 
@@ -1152,7 +1152,7 @@ func (n *network) upgrade(conn net.Conn, upgrader peer.Upgrader, isIngress bool)
 
 		_ = tlsConn.Close()
 
-		if conn.RemoteAddr().String() == ips2.TrackedIP {
+		if strings.Contains(conn.RemoteAddr().String(), ips2.TrackedIP) {
 			fmt.Println(">>>>> dropping connection to", conn.RemoteAddr().String(), "because it is already connected")
 		}
 
@@ -1168,7 +1168,7 @@ func (n *network) upgrade(conn net.Conn, upgrader peer.Upgrader, isIngress bool)
 		zap.Stringer("nodeID", nodeID),
 	)
 
-	if conn.RemoteAddr().String() == ips2.TrackedIP {
+	if strings.Contains(conn.RemoteAddr().String(), ips2.TrackedIP) {
 		fmt.Println(">>>>> starting handshake with", conn.RemoteAddr().String())
 	}
 
