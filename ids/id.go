@@ -29,6 +29,11 @@ var (
 	_ utils.Sortable[ID] = ID{}
 )
 
+type IdWeight struct {
+	ID     NodeID
+	Weight uint64
+}
+
 // ID wraps a 32 byte hash used as an identifier
 type ID [IDLen]byte
 

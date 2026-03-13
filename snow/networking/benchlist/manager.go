@@ -39,7 +39,7 @@ type Manager interface {
 	// not map to a validator, it will return an empty array.
 	GetBenched(nodeID ids.NodeID) []ids.ID
 
-	GetBenchedNoes() map[ids.ID]set.Set[ids.NodeID]
+	GetBenchedNoes() map[ids.ID]set.Set[ids.IdWeight]
 }
 
 // Config defines the configuration for a benchlist
@@ -89,11 +89,11 @@ func (m *manager) IsBenched(nodeID ids.NodeID, chainID ids.ID) bool {
 	return isBenched
 }
 
-func (m *manager) GetBenchedNoes() map[ids.ID]set.Set[ids.NodeID] {
+func (m *manager) GetBenchedNoes() map[ids.ID]set.Set[ids.IdWeight] {
 	m.lock.RLock()
 	defer m.lock.RUnlock()
 
-	res := make(map[ids.ID]set.Set[ids.NodeID])
+	res := make(map[ids.ID]set.Set[ids.IdWeight])
 
 	for chainID := range m.chainBenchlists {
 		res[chainID] = m.chainBenchlists[chainID].BenchedNodes()
@@ -173,7 +173,7 @@ func (m *manager) RegisterFailure(chainID ids.ID, nodeID ids.NodeID) {
 
 type noBenchlist struct{}
 
-func (b noBenchlist) GetBenchedNoes() map[ids.ID]set.Set[ids.NodeID] {
+func (b noBenchlist) GetBenchedNoes() map[ids.ID]set.Set[ids.IdWeight] {
 	return nil
 }
 

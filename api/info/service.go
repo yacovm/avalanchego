@@ -275,8 +275,8 @@ func (i *Info) Peers(_ *http.Request, args *PeersArgs, reply *PeersReply) error 
 		}
 
 		peersForChain := make([]string, 0, len(nodes))
-		for nodeID := range nodes {
-			peersForChain = append(peersForChain, nodeID.String())
+		for node := range nodes {
+			peersForChain = append(peersForChain, fmt.Sprintf("%s %d", node.ID, node.Weight))
 		}
 
 		benchedPeersByChain[chainName] = peersForChain

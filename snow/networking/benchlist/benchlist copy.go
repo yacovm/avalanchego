@@ -53,6 +53,7 @@ type benchlist struct {
 type node struct {
 	failureProbability math.Averager
 	isBenched          bool
+	weight             uint64
 }
 
 type job struct {
@@ -136,14 +137,14 @@ func (b *benchlist) RegisterFailure(nodeID ids.NodeID) {
 	}
 }
 
-func (b *benchlist) BenchedNodes() set.Set[ids.NodeID] {
+func (b *benchlist) BenchedNodes() set.Set[ids.IdWeight] {
 	b.lock.RLock()
 	defer b.lock.RUnlock()
 
-	var benched set.Set[ids.NodeID]
-	for nodeID := range b.nodes {
+	var benched set.Set[ids.IdWeight]
+	for nodeID, node := range b.nodes {
 		if b.nodes[nodeID].isBenched {
-			benched.Add(nodeID)
+			benched.Add(ids.IdWeight{Weight: node.weight, ID: nodeID})
 		}
 	}
 	return benched
@@ -163,7 +164,10 @@ func (b *benchlist) getNode(nodeID ids.NodeID) *node {
 		return n
 	}
 
+	weight := b.vdrs.GetWeight(b.ctx.SubnetID, nodeID)
+
 	n := &node{
+		weight:             weight,
 		failureProbability: math.NewUninitializedAverager(halflife),
 	}
 	b.nodes[nodeID] = n
