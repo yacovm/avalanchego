@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"sort"
 
 	"github.com/gorilla/rpc/v2"
 	"go.uber.org/zap"
@@ -274,8 +275,16 @@ func (i *Info) Peers(_ *http.Request, args *PeersArgs, reply *PeersReply) error 
 			return fmt.Errorf("failed to get primary alias for chain ID %s: %w", chainID, err)
 		}
 
-		peersForChain := make([]string, 0, len(nodes))
+		sortedNodes := make([]ids.IdWeight, 0, len(nodes))
 		for node := range nodes {
+			sortedNodes = append(sortedNodes, node)
+		}
+		sort.Slice(sortedNodes, func(i, j int) bool {
+			return sortedNodes[i].Weight > sortedNodes[j].Weight
+		})
+
+		peersForChain := make([]string, 0, len(sortedNodes))
+		for _, node := range sortedNodes {
 			peersForChain = append(peersForChain, fmt.Sprintf("%s %d", node.ID, node.Weight))
 		}
 
