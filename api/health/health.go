@@ -59,13 +59,15 @@ type Reporter interface {
 }
 
 type health struct {
-	log       logging.Logger
-	readiness *worker
-	health    *worker
-	liveness  *worker
+	gracePeriod      time.Duration
+	startupTimestamp time.Time
+	log              logging.Logger
+	readiness        *worker
+	health           *worker
+	liveness         *worker
 }
 
-func New(log logging.Logger, registerer prometheus.Registerer) (Health, error) {
+func New(log logging.Logger, registerer prometheus.Registerer, startupTimestamp time.Time, gracePeriod time.Duration) (Health, error) {
 	failingChecks := prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "checks_failing",
@@ -74,10 +76,12 @@ func New(log logging.Logger, registerer prometheus.Registerer) (Health, error) {
 		[]string{CheckLabel, TagLabel},
 	)
 	return &health{
-		log:       log,
-		readiness: newWorker(log, "readiness", failingChecks),
-		health:    newWorker(log, "health", failingChecks),
-		liveness:  newWorker(log, "liveness", failingChecks),
+		gracePeriod:      gracePeriod,
+		startupTimestamp: startupTimestamp,
+		log:              log,
+		readiness:        newWorker(log, "readiness", failingChecks),
+		health:           newWorker(log, "health", failingChecks),
+		liveness:         newWorker(log, "liveness", failingChecks),
 	}, registerer.Register(failingChecks)
 }
 
@@ -111,6 +115,13 @@ func (h *health) Health(tags ...string) (map[string]Result, bool) {
 			zap.String("namespace", "health"),
 			zap.Reflect("reason", results),
 		)
+	}
+	elapsed := time.Since(h.startupTimestamp)
+	if !healthy && elapsed < h.gracePeriod {
+		h.log.Debug("Health check surpressed due to grace period",
+			zap.Duration("elapsed", elapsed),
+			zap.Duration("grace_period", h.gracePeriod))
+		healthy = true
 	}
 	return results, healthy
 }

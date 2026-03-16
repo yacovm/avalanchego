@@ -148,6 +148,8 @@ type Config struct {
 	// Health
 	HealthCheckFreq time.Duration `json:"healthCheckFreq"`
 
+	HealthCheckGracePeriod time.Duration `json:"healthCheckGracePeriod"`
+
 	// Network configuration
 	NetworkConfig network.Config `json:"networkConfig"`
 

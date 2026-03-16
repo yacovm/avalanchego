@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
@@ -22,7 +23,7 @@ func TestServiceResponses(t *testing.T) {
 		return "", nil
 	})
 
-	h, err := New(logging.NoLog{}, prometheus.NewRegistry())
+	h, err := New(logging.NoLog{}, prometheus.NewRegistry(), time.Now(), 0)
 	require.NoError(err)
 
 	s := &Service{
@@ -158,7 +159,7 @@ func TestServiceTagResponse(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			require := require.New(t)
 
-			h, err := New(logging.NoLog{}, prometheus.NewRegistry())
+			h, err := New(logging.NoLog{}, prometheus.NewRegistry(), time.Now(), 0)
 			require.NoError(err)
 			require.NoError(test.register(h, "check1", check))
 			require.NoError(test.register(h, "check2", check, subnetID1.String()))

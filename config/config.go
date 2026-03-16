@@ -1409,6 +1409,10 @@ func GetNodeConfig(v *viper.Viper) (node.Config, error) {
 	if nodeConfig.HealthCheckFreq < 0 {
 		return node.Config{}, fmt.Errorf("%s must be positive", HealthCheckFreqKey)
 	}
+	nodeConfig.HealthCheckGracePeriod = v.GetDuration(HealthCheckGracePeriodKey)
+	if nodeConfig.HealthCheckGracePeriod < 0 {
+		return node.Config{}, fmt.Errorf("%s must be non-negative", HealthCheckGracePeriodKey)
+	}
 	// Halflife of continuous averager used in health checks
 	healthCheckAveragerHalflife := v.GetDuration(HealthCheckAveragerHalflifeKey)
 	if healthCheckAveragerHalflife <= 0 {

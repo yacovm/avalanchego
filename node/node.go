@@ -1418,7 +1418,8 @@ func (n *Node) initHealthAPI() error {
 		return err
 	}
 
-	n.health, err = health.New(n.Log, healthReg)
+	startupTimestamp := time.Now()
+	n.health, err = health.New(n.Log, healthReg, startupTimestamp, n.Config.HealthCheckGracePeriod)
 	if err != nil {
 		return err
 	}

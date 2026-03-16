@@ -54,7 +54,7 @@ func TestDuplicatedRegistrations(t *testing.T) {
 		return "", nil
 	})
 
-	h, err := New(logging.NoLog{}, prometheus.NewRegistry())
+	h, err := New(logging.NoLog{}, prometheus.NewRegistry(), time.Now(), 0)
 	require.NoError(err)
 
 	require.NoError(h.RegisterReadinessCheck("check", check))
@@ -77,7 +77,7 @@ func TestDefaultFailing(t *testing.T) {
 		return "", nil
 	})
 
-	h, err := New(logging.NoLog{}, prometheus.NewRegistry())
+	h, err := New(logging.NoLog{}, prometheus.NewRegistry(), time.Now(), 0)
 	require.NoError(err)
 
 	{
@@ -118,7 +118,7 @@ func TestPassingChecks(t *testing.T) {
 		return "", nil
 	})
 
-	h, err := New(logging.NoLog{}, prometheus.NewRegistry())
+	h, err := New(logging.NoLog{}, prometheus.NewRegistry(), time.Now(), 0)
 	require.NoError(err)
 
 	require.NoError(h.RegisterReadinessCheck("check", check))
@@ -182,7 +182,7 @@ func TestPassingThenFailingChecks(t *testing.T) {
 		return "", nil
 	})
 
-	h, err := New(logging.NoLog{}, prometheus.NewRegistry())
+	h, err := New(logging.NoLog{}, prometheus.NewRegistry(), time.Now(), 0)
 	require.NoError(err)
 
 	require.NoError(h.RegisterReadinessCheck("check", check))
@@ -226,10 +226,44 @@ func TestPassingThenFailingChecks(t *testing.T) {
 	}
 }
 
+func TestHealthGracePeriod(t *testing.T) {
+	require := require.New(t)
+
+	check := CheckerFunc(func(context.Context) (interface{}, error) {
+		return errUnhealthy.Error(), errUnhealthy
+	})
+
+	// Use a short grace period so we can test expiry.
+	gracePeriod := 200 * time.Millisecond
+	h, err := New(logging.NoLog{}, prometheus.NewRegistry(), time.Now(), gracePeriod)
+	require.NoError(err)
+
+	require.NoError(h.RegisterHealthCheck("check", check))
+
+	h.Start(t.Context(), checkFreq)
+	defer h.Stop()
+
+	// Wait for the check to run and fail.
+	require.Eventually(func() bool {
+		results, _ := h.Health()
+		r, ok := results["check"]
+		return ok && r.ContiguousFailures > 0
+	}, awaitTimeout, awaitFreq)
+
+	// During the grace period, Health should still report healthy.
+	_, healthy := h.Health()
+	require.True(healthy, "expected healthy=true during grace period")
+
+	// After the grace period expires, Health should report unhealthy.
+	time.Sleep(gracePeriod)
+	_, healthy = h.Health()
+	require.False(healthy, "expected healthy=false after grace period expired")
+}
+
 func TestDeadlockRegression(t *testing.T) {
 	require := require.New(t)
 
-	h, err := New(logging.NoLog{}, prometheus.NewRegistry())
+	h, err := New(logging.NoLog{}, prometheus.NewRegistry(), time.Now(), 0)
 	require.NoError(err)
 
 	var lock sync.Mutex
@@ -259,7 +293,7 @@ func TestTags(t *testing.T) {
 		return "", nil
 	})
 
-	h, err := New(logging.NoLog{}, prometheus.NewRegistry())
+	h, err := New(logging.NoLog{}, prometheus.NewRegistry(), time.Now(), 0)
 	require.NoError(err)
 	require.NoError(h.RegisterHealthCheck("check1", check))
 	require.NoError(h.RegisterHealthCheck("check2", check, "tag1"))

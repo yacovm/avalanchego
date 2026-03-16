@@ -244,6 +244,7 @@ func addNodeFlags(fs *pflag.FlagSet) {
 
 	// Health Checks
 	fs.Duration(HealthCheckFreqKey, 30*time.Second, "Time between health checks")
+	fs.Duration(HealthCheckGracePeriodKey, 5*time.Minute, "Duration after startup during which failing health checks are suppressed")
 	fs.Duration(HealthCheckAveragerHalflifeKey, constants.DefaultHealthCheckAveragerHalflife, "Halflife of averager when calculating a running average in a health check")
 	// Network Layer Health
 	fs.Duration(NetworkHealthMaxTimeSinceMsgSentKey, constants.DefaultNetworkHealthMaxTimeSinceMsgSent, "Network layer returns unhealthy if haven't sent a message for at least this much time")

@@ -163,6 +163,7 @@ const (
 	RouterHealthMaxDropRateKey                           = "router-health-max-drop-rate"
 	RouterHealthMaxOutstandingRequestsKey                = "router-health-max-outstanding-requests"
 	HealthCheckFreqKey                                   = "health-check-frequency"
+	HealthCheckGracePeriodKey                            = "health-check-grace-period"
 	HealthCheckAveragerHalflifeKey                       = "health-check-averager-halflife"
 	PluginDirKey                                         = "plugin-dir"
 	BootstrapBeaconConnectionTimeoutKey                  = "bootstrap-beacon-connection-timeout"
