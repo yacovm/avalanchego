@@ -40,7 +40,7 @@ func TestStorageNew(t *testing.T) {
 			}(),
 			db: func() database.KeyValueReaderWriter {
 				db := memdb.New()
-				finalization := newTestFinalization(t, newNetworkConfigs(t, 1), simplex.BlockHeader{
+				finalization := newTestFinalization(t, newNetworkConfigs(t, 1, noKeyReuse), simplex.BlockHeader{
 					ProtocolMetadata: simplex.ProtocolMetadata{
 						Round: 1,
 						Seq:   1,
@@ -136,7 +136,7 @@ func TestStorageIndexFails(t *testing.T) {
 	child1 := newTestBlock(t, newBlockConfig{prev: genesis})
 	child2 := newTestBlock(t, newBlockConfig{prev: child1})
 
-	configs := newNetworkConfigs(t, 4)
+	configs := newNetworkConfigs(t, 4, noKeyReuse)
 	configs[0].VM = genesis.vmBlock.(*wrappedBlock).vm
 
 	_, verifier, err := NewBLSAuth(configs[0])
@@ -223,7 +223,7 @@ func TestIndexMismatchedChild(t *testing.T) {
 	child1Sibling := newTestBlock(t, newBlockConfig{prev: genesis})
 	child2Nephew := newTestBlock(t, newBlockConfig{prev: child1Sibling})
 
-	configs := newNetworkConfigs(t, 4)
+	configs := newNetworkConfigs(t, 4, noKeyReuse)
 	configs[0].VM = genesis.vmBlock.(*wrappedBlock).vm
 
 	_, verifier, err := NewBLSAuth(configs[0])
@@ -255,7 +255,7 @@ func TestIndexMismatchedChild(t *testing.T) {
 func TestStorageIndexSuccess(t *testing.T) {
 	ctx := t.Context()
 	genesis := newTestBlock(t, newBlockConfig{})
-	configs := newNetworkConfigs(t, 4)
+	configs := newNetworkConfigs(t, 4, noKeyReuse)
 
 	_, verifier, err := NewBLSAuth(configs[0])
 	require.NoError(t, err)

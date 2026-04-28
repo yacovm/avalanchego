@@ -6,6 +6,7 @@ package simplex
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,7 +95,7 @@ func TestHealthCheck(t *testing.T) {
 }
 
 func TestSimplexEngineNilParameters(t *testing.T) {
-	configs := newNetworkConfigs(t, 4)
+	configs := newNetworkConfigs(t, 4, noKeyReuse)
 	ctx := t.Context()
 
 	config := configs[0]
@@ -183,7 +184,7 @@ func TestGetTickInterval(t *testing.T) {
 }
 
 func TestSimplexEngineRejectsMalformedSimplexMessages(t *testing.T) {
-	configs := newNetworkConfigs(t, 4)
+	configs := newNetworkConfigs(t, 4, noKeyReuse)
 	ctx := t.Context()
 
 	config := configs[0]
@@ -625,7 +626,7 @@ func NewReplicationResponseMessage(qcBytes []byte) *p2p.Simplex {
 func FuzzSimplexVotes(f *testing.F) {
 	f.Fuzz(func(t *testing.T, blockDigest []byte, signer []byte, epoch, round, seq uint64, version uint32) {
 		ctx := t.Context()
-		engine, configs := setupEngine(t)
+		engine, configs := setupEngineForFuzz(t)
 
 		msg := &p2p.Simplex{
 			Message: &p2p.Simplex_Vote{
@@ -652,7 +653,7 @@ func FuzzSimplexVotes(f *testing.F) {
 func FuzzSimplexEmptyVotes(f *testing.F) {
 	f.Fuzz(func(t *testing.T, signer []byte, epoch, round uint64, signerValue []byte) {
 		ctx := t.Context()
-		engine, configs := setupEngine(t)
+		engine, configs := setupEngineForFuzz(t)
 
 		msg := &p2p.Simplex{
 			Message: &p2p.Simplex_EmptyVote{
@@ -670,7 +671,7 @@ func FuzzSimplexEmptyVotes(f *testing.F) {
 func FuzzSimplexFinalizeVotes(f *testing.F) {
 	f.Fuzz(func(t *testing.T, signer []byte, signerValue []byte, blockDigest []byte, epoch, round, seq uint64, version uint32) {
 		ctx := t.Context()
-		engine, configs := setupEngine(t)
+		engine, configs := setupEngineForFuzz(t)
 
 		msg := &p2p.Simplex{
 			Message: &p2p.Simplex_FinalizeVote{
@@ -695,10 +696,11 @@ func FuzzSimplexFinalizeVotes(f *testing.F) {
 }
 
 func FuzzSimplexNotarizations(f *testing.F) {
-	f.Fuzz(func(t *testing.T, qcData, blockDigest []byte, epoch, round, seq uint64, version uint32) {
+	qc := buildQCWithBytes(f, newConfigsForQC(f, 4), []byte("fuzz qc message"))
+
+	f.Fuzz(func(t *testing.T, blockDigest []byte, epoch, round, seq uint64, version uint32) {
 		ctx := t.Context()
-		engine, configs := setupEngine(t)
-		qc := buildQCWithBytes(t, configs, qcData)
+		engine, configs := setupEngineForFuzz(t)
 
 		msg := &p2p.Simplex{
 			Message: &p2p.Simplex_Notarization{
@@ -723,10 +725,11 @@ func FuzzSimplexNotarizations(f *testing.F) {
 }
 
 func FuzzSimplexFinalizations(f *testing.F) {
-	f.Fuzz(func(t *testing.T, qcData, blockDigest []byte, epoch, round, seq uint64, version uint32) {
+	qc := buildQCWithBytes(f, newConfigsForQC(f, 4), []byte("fuzz qc message"))
+
+	f.Fuzz(func(t *testing.T, blockDigest []byte, epoch, round, seq uint64, version uint32) {
 		ctx := t.Context()
-		engine, configs := setupEngine(t)
-		qc := buildQCWithBytes(t, configs, qcData)
+		engine, configs := setupEngineForFuzz(t)
 
 		msg := &p2p.Simplex{
 			Message: &p2p.Simplex_Finalization{
@@ -753,7 +756,7 @@ func FuzzSimplexFinalizations(f *testing.F) {
 func FuzzSimplexReplicationRequests(f *testing.F) {
 	f.Fuzz(func(t *testing.T, seq1, seq2, seq3, latestRound uint64) {
 		ctx := t.Context()
-		engine, configs := setupEngine(t)
+		engine, configs := setupEngineForFuzz(t)
 
 		msg := &p2p.Simplex{
 			Message: &p2p.Simplex_ReplicationRequest{
@@ -769,10 +772,11 @@ func FuzzSimplexReplicationRequests(f *testing.F) {
 }
 
 func FuzzSimplexReplicationResponses(f *testing.F) {
-	f.Fuzz(func(t *testing.T, qcData, blockDigest []byte, epoch, round, seq uint64, version uint32) {
+	qc := buildQCWithBytes(f, newConfigsForQC(f, 4), []byte("fuzz qc message"))
+
+	f.Fuzz(func(t *testing.T, blockDigest []byte, epoch, round, seq uint64, version uint32) {
 		ctx := t.Context()
-		engine, configs := setupEngine(t)
-		qc := buildQCWithBytes(t, configs, qcData)
+		engine, configs := setupEngineForFuzz(t)
 
 		msg := &p2p.Simplex{
 			Message: &p2p.Simplex_ReplicationResponse{
@@ -807,7 +811,7 @@ func FuzzSimplexReplicationResponses(f *testing.F) {
 func FuzzSimplexBlockProposals(f *testing.F) {
 	f.Fuzz(func(t *testing.T, blockBytes []byte, blockDigest []byte, round, epoch, seq uint64, version uint32) {
 		ctx := t.Context()
-		engine, configs := setupEngine(t)
+		engine, configs := setupEngineForFuzz(t)
 		msg := &p2p.Simplex{
 			ChainId: []byte("chain-1"),
 			Message: &p2p.Simplex_BlockProposal{
@@ -835,10 +839,11 @@ func FuzzSimplexBlockProposals(f *testing.F) {
 }
 
 func FuzzSimplexEmptyNotarizations(f *testing.F) {
-	f.Fuzz(func(t *testing.T, data []byte, round uint64, epoch uint64) {
+	qc := buildQCWithBytes(f, newConfigsForQC(f, 4), []byte("fuzz qc message"))
+
+	f.Fuzz(func(t *testing.T, round uint64, epoch uint64) {
 		ctx := t.Context()
-		engine, configs := setupEngine(t)
-		qc := buildQCWithBytes(t, configs, data)
+		engine, configs := setupEngineForFuzz(t)
 		msg := &p2p.Simplex{
 			Message: &p2p.Simplex_EmptyNotarization{
 				EmptyNotarization: &p2p.EmptyNotarization{
@@ -852,27 +857,54 @@ func FuzzSimplexEmptyNotarizations(f *testing.F) {
 	})
 }
 
+func setupEngineForFuzz(t *testing.T) (*Engine, []*Config) {
+	configs, config, engine := configureEngine(t)
+
+	config.VM.(*wrappedVM).ParseBlockF = func(_ context.Context, _ []byte) (snowman.Block, error) {
+		return newTestBlock(t, newBlockConfig{round: 1}).vmBlock, nil
+	}
+
+	// ensure any go-routines started by the engine are cleaned up after the test finishes
+	t.Cleanup(func() {
+		require.NoError(t, engine.Shutdown(t.Context()))
+	})
+
+	require.NoError(t, engine.epoch.Start())
+
+	return engine, configs
+}
+
 func setupEngine(t *testing.T) (*Engine, []*Config) {
-	configs := newNetworkConfigs(t, 4)
+	configs, config, engine := configureEngine(t)
+
+	config.VM.(*wrappedVM).ParseBlockF = func(_ context.Context, _ []byte) (snowman.Block, error) {
+		return newTestBlock(t, newBlockConfig{round: 1}).vmBlock, nil
+	}
+
+	// ensure any go-routines started by the engine are cleaned up after the test finishes
+	t.Cleanup(func() {
+		require.NoError(t, engine.Shutdown(t.Context()))
+	})
+
+	require.NoError(t, engine.Start(t.Context(), 1))
+	md := engine.epoch.Metadata()
+	require.Equal(t, uint64(1), md.Seq)
+	require.Equal(t, uint64(1), md.Round)
+	return engine, configs
+}
+
+func configureEngine(t *testing.T) ([]*Config, *Config, *Engine) {
+	reuseSameKey := noKeyReuse
+	if strings.HasPrefix(t.Name(), "Fuzz") {
+		reuseSameKey = reuseKeys
+	}
+
+	configs := newNetworkConfigs(t, 4, reuseSameKey)
 	ctx := t.Context()
 
 	config := configs[0]
 	config.Sender.(*sendermock.ExternalSender).EXPECT().Send(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
 	engine, err := NewEngine(ctx, config)
 	require.NoError(t, err)
-
-	// ensure any go-routines started by the engine are cleaned up after the test finishes
-	t.Cleanup(func() {
-		require.NoError(t, engine.Shutdown(ctx))
-	})
-
-	config.VM.(*wrappedVM).ParseBlockF = func(_ context.Context, _ []byte) (snowman.Block, error) {
-		return newTestBlock(t, newBlockConfig{round: 1}).vmBlock, nil
-	}
-
-	require.NoError(t, engine.Start(ctx, 1))
-	md := engine.epoch.Metadata()
-	require.Equal(t, uint64(1), md.Seq)
-	require.Equal(t, uint64(1), md.Round)
-	return engine, configs
+	return configs, config, engine
 }

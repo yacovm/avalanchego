@@ -17,7 +17,7 @@ import (
 // TestQCDuplicateSigners tests verification fails if the
 // same signer signs multiple times.
 func TestQCDuplicateSigners(t *testing.T) {
-	configs := newNetworkConfigs(t, 4)
+	configs := newNetworkConfigs(t, 4, noKeyReuse)
 	quorum := simplex.Quorum(len(configs))
 	msg := []byte("Begin at the beginning, and go on till you come to the end: then stop")
 
@@ -98,7 +98,7 @@ func TestQCDeserializerInvalidBytes(t *testing.T) {
 }
 
 func TestSignatureAggregation(t *testing.T) {
-	configs := newNetworkConfigs(t, 4)
+	configs := newNetworkConfigs(t, 4, noKeyReuse)
 	msg := []byte("test message")
 
 	tests := []struct {
@@ -162,7 +162,7 @@ func TestSignatureAggregation(t *testing.T) {
 				}
 
 				// add a signature from a node not in the membership set
-				newConfig := newNetworkConfigs(t, 4)
+				newConfig := newNetworkConfigs(t, 4, noKeyReuse)
 				signer, _, err := NewBLSAuth(newConfig[0])
 				require.NoError(t, err)
 				sig, err := signer.Sign(msg)
@@ -204,7 +204,7 @@ func TestSignatureAggregation(t *testing.T) {
 }
 
 func TestQCVerifyWithWrongMessage(t *testing.T) {
-	configs := newNetworkConfigs(t, 4)
+	configs := newNetworkConfigs(t, 4, noKeyReuse)
 	originalMsg := []byte("original message")
 	wrongMsg := []byte("wrong message")
 	sigs := make([]simplex.Signature, 0, len(configs))
@@ -235,7 +235,7 @@ func TestQCVerifyWithWrongMessage(t *testing.T) {
 }
 
 func TestIsQuorum(t *testing.T) {
-	configs := newNetworkConfigs(t, 4)
+	configs := newNetworkConfigs(t, 4, noKeyReuse)
 	_, verifier, err := NewBLSAuth(configs[0])
 	require.NoError(t, err)
 	aggregator := SignatureAggregator{verifier: &verifier}
