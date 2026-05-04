@@ -373,3 +373,32 @@ func (m *Manager) GetCurrentValidatorSet(ctx context.Context, subnetID ids.ID) (
 	}
 	return result, height, nil
 }
+
+// GetL1ValidatorsAtHeight returns every L1 validator of [subnetID] at
+// [height], including those whose accumulated fee balance had been depleted
+// (i.e. inactive validators). The returned validators always carry their
+// real NodeID and PublicKey rather than being collapsed under
+// [ids.EmptyNodeID] the way [GetValidatorSet] is.
+//
+// The reconstruction reads the current persisted L1 validator set and walks
+// the L1 reverse-diff index backwards from the last accepted height down to
+// [height + 1].
+func (m *Manager) GetL1ValidatorsAtHeight(
+	ctx context.Context,
+	height uint64,
+	subnetID ids.ID,
+) ([]state.L1ValidatorMembership, error) {
+	currentHeight, err := m.getCurrentHeight(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if currentHeight < height {
+		return nil, fmt.Errorf("%w with SubnetID = %s: current P-chain height (%d) < requested P-Chain height (%d)",
+			errUnfinalizedHeight,
+			subnetID,
+			currentHeight,
+			height,
+		)
+	}
+	return m.state.GetL1ValidatorsAtHeight(ctx, height, subnetID)
+}

@@ -5,6 +5,7 @@ package state
 
 import (
 	"bytes"
+	"context"
 	"maps"
 	"math"
 	"math/rand"
@@ -3210,4 +3211,183 @@ func TestGetPublicKeyDiffs(t *testing.T) {
 			require.Equal(tt.expected, result)
 		})
 	}
+}
+
+// TestGetL1ValidatorsAtHeight exercises reverse-diff reconstruction of an
+// L1's full validator set (active and inactive alike) across multiple
+// heights covering addition, deactivation (EndAccumulatedFee=0 with weight
+// preserved), weight change, and full removal.
+func TestGetL1ValidatorsAtHeight(t *testing.T) {
+	ctx := context.Background()
+	state := newTestState(t, memdb.New())
+	r := require.New(t)
+
+	subnetID := ids.GenerateTestID()
+	otherSubnetID := ids.GenerateTestID()
+
+	skA, err := localsigner.New()
+	r.NoError(err)
+	pkABytes := bls.PublicKeyToUncompressedBytes(skA.PublicKey())
+
+	skB, err := localsigner.New()
+	r.NoError(err)
+	pkBBytes := bls.PublicKeyToUncompressedBytes(skB.PublicKey())
+
+	skC, err := localsigner.New()
+	r.NoError(err)
+	pkCBytes := bls.PublicKeyToUncompressedBytes(skC.PublicKey())
+
+	vidA := ids.GenerateTestID()
+	vidB := ids.GenerateTestID()
+	vidC := ids.GenerateTestID() // Different subnet — must never appear.
+	nodeA := ids.GenerateTestNodeID()
+	nodeB := ids.GenerateTestNodeID()
+	nodeC := ids.GenerateTestNodeID()
+
+	// Height 1: add A (active) and an unrelated subnet's validator.
+	r.NoError(state.PutL1Validator(L1Validator{
+		ValidationID:          vidA,
+		SubnetID:              subnetID,
+		NodeID:                nodeA,
+		PublicKey:             pkABytes,
+		RemainingBalanceOwner: []byte{},
+		DeactivationOwner:     []byte{},
+		Weight:                10,
+		EndAccumulatedFee:     100, // active
+	}))
+	r.NoError(state.PutL1Validator(L1Validator{
+		ValidationID:          vidC,
+		SubnetID:              otherSubnetID,
+		NodeID:                nodeC,
+		PublicKey:             pkCBytes,
+		RemainingBalanceOwner: []byte{},
+		DeactivationOwner:     []byte{},
+		Weight:                7,
+		EndAccumulatedFee:     50,
+	}))
+	state.SetHeight(1)
+	r.NoError(state.Commit())
+
+	// Height 2: add B (inactive) on the same subnet.
+	r.NoError(state.PutL1Validator(L1Validator{
+		ValidationID:          vidB,
+		SubnetID:              subnetID,
+		NodeID:                nodeB,
+		PublicKey:             pkBBytes,
+		RemainingBalanceOwner: []byte{},
+		DeactivationOwner:     []byte{},
+		Weight:                20,
+		EndAccumulatedFee:     0, // inactive — must still appear in the result
+	}))
+	state.SetHeight(2)
+	r.NoError(state.Commit())
+
+	// Height 3: deactivate A — weight unchanged, so set membership is
+	// unchanged. No diff should be written; the API should still report
+	// both A and B at all subsequent heights.
+	a, err := state.GetL1Validator(vidA)
+	r.NoError(err)
+	a.EndAccumulatedFee = 0
+	r.NoError(state.PutL1Validator(a))
+	state.SetHeight(3)
+	r.NoError(state.Commit())
+
+	// Height 4: change A's weight (membership change → diff written).
+	a, err = state.GetL1Validator(vidA)
+	r.NoError(err)
+	a.Weight = 11
+	a.MinNonce = 1
+	r.NoError(state.PutL1Validator(a))
+	state.SetHeight(4)
+	r.NoError(state.Commit())
+
+	// Height 5: remove B entirely.
+	b, err := state.GetL1Validator(vidB)
+	r.NoError(err)
+	b.Weight = 0
+	r.NoError(state.PutL1Validator(b))
+	state.SetHeight(5)
+	r.NoError(state.Commit())
+
+	type expected struct {
+		validationID ids.ID
+		nodeID       ids.NodeID
+		pkBytes      []byte
+		weight       uint64
+	}
+	tests := []struct {
+		name   string
+		height uint64
+		want   []expected
+	}{
+		{
+			name:   "current height (5): B removed, A weight 11",
+			height: 5,
+			want: []expected{
+				{vidA, nodeA, pkABytes, 11},
+			},
+		},
+		{
+			name:   "height 4: A weight 11, B inactive weight 20",
+			height: 4,
+			want: []expected{
+				{vidA, nodeA, pkABytes, 11},
+				{vidB, nodeB, pkBBytes, 20},
+			},
+		},
+		{
+			name:   "height 3: A weight 10 (deactivation didn't change membership), B weight 20",
+			height: 3,
+			want: []expected{
+				{vidA, nodeA, pkABytes, 10},
+				{vidB, nodeB, pkBBytes, 20},
+			},
+		},
+		{
+			name:   "height 2: A weight 10, B weight 20",
+			height: 2,
+			want: []expected{
+				{vidA, nodeA, pkABytes, 10},
+				{vidB, nodeB, pkBBytes, 20},
+			},
+		},
+		{
+			name:   "height 1: only A weight 10",
+			height: 1,
+			want: []expected{
+				{vidA, nodeA, pkABytes, 10},
+			},
+		},
+		{
+			name:   "height 0: empty",
+			height: 0,
+			want:   nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := require.New(t)
+			got, err := state.GetL1ValidatorsAtHeight(ctx, tt.height, subnetID)
+			r.NoError(err)
+
+			byVID := make(map[ids.ID]L1ValidatorMembership, len(got))
+			for _, m := range got {
+				r.Equal(subnetID, m.SubnetID)
+				byVID[m.ValidationID] = m
+			}
+			r.Len(got, len(tt.want))
+			for _, w := range tt.want {
+				m, ok := byVID[w.validationID]
+				r.True(ok, "missing validationID %s", w.validationID)
+				r.Equal(w.nodeID, m.NodeID)
+				r.Equal(w.weight, m.Weight)
+				expectedPK := bls.PublicKeyFromValidUncompressedBytes(w.pkBytes)
+				r.True(expectedPK.Equals(m.PublicKey))
+			}
+		})
+	}
+
+	// Querying past the last accepted height must error.
+	_, err = state.GetL1ValidatorsAtHeight(ctx, 6, subnetID)
+	r.Error(err)
 }

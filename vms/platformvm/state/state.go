@@ -77,6 +77,7 @@ var (
 	ValidatorWeightDiffsByHeightPrefix      = []byte("flatValidatorDiffsByHeight")
 	ValidatorPublicKeyDiffsBySubnetIDPrefix = []byte("flatPublicKeyDiffs")
 	ValidatorPublicKeyDiffsByHeightPrefix   = []byte("flatPublicKeyDiffsByHeight")
+	L1ValidatorDiffsBySubnetIDPrefix        = []byte("flatL1ValidatorDiffs")
 	TxPrefix                                = []byte("tx")
 	RewardUTXOsPrefix                       = []byte("rewardUTXOs")
 	UTXOPrefix                              = []byte("utxo")
@@ -306,6 +307,7 @@ type State struct {
 	validatorWeightDiffsByHeightDB      database.Database
 	validatorPublicKeyDiffsBySubnetIDDB database.Database
 	validatorPublicKeyDiffsByHeightDB   database.Database
+	l1ValidatorDiffsBySubnetIDDB        database.Database
 
 	addedTxs map[ids.ID]*txAndStatus            // map of txID -> {*txs.Tx, Status}
 	txCache  cache.Cacher[ids.ID, *txAndStatus] // txID -> {*txs.Tx, Status}; if the entry is nil, it is not in the database
@@ -493,6 +495,7 @@ func New(
 	validatorWeightDiffsByHeightDB := prefixdb.New(ValidatorWeightDiffsByHeightPrefix, validatorsDB)
 	validatorPublicKeyDiffsBySubnetIDDB := prefixdb.New(ValidatorPublicKeyDiffsBySubnetIDPrefix, validatorsDB)
 	validatorPublicKeyDiffsByHeightDB := prefixdb.New(ValidatorPublicKeyDiffsByHeightPrefix, validatorsDB)
+	l1ValidatorDiffsBySubnetIDDB := prefixdb.New(L1ValidatorDiffsBySubnetIDPrefix, validatorsDB)
 
 	weightsCache, err := metercacher.New(
 		"l1_validator_weights_cache",
@@ -686,6 +689,7 @@ func New(
 		validatorWeightDiffsByHeightDB:      validatorWeightDiffsByHeightDB,
 		validatorPublicKeyDiffsBySubnetIDDB: validatorPublicKeyDiffsBySubnetIDDB,
 		validatorPublicKeyDiffsByHeightDB:   validatorPublicKeyDiffsByHeightDB,
+		l1ValidatorDiffsBySubnetIDDB:        l1ValidatorDiffsBySubnetIDDB,
 
 		addedTxs: make(map[ids.ID]*txAndStatus),
 		txDB:     prefixdb.New(TxPrefix, baseDB),
@@ -883,6 +887,139 @@ func (s *State) HasL1Validator(subnetID ids.ID, nodeID ids.NodeID) (bool, error)
 
 func (s *State) PutL1Validator(l1Validator L1Validator) error {
 	return s.l1ValidatorsDiff.putL1Validator(s, l1Validator)
+}
+
+// L1ValidatorMembership describes the set membership of an L1 validator at a
+// given P-chain height. Unlike [L1Validator], it omits fee/balance fields and
+// always carries the validator's real [NodeID] / [PublicKey] / [Weight] —
+// regardless of whether the validator was active or inactive at that height.
+type L1ValidatorMembership struct {
+	ValidationID ids.ID
+	SubnetID     ids.ID
+	NodeID       ids.NodeID
+	PublicKey    *bls.PublicKey
+	Weight       uint64
+}
+
+// GetL1ValidatorsAtHeight returns the full set of L1 validators of [subnetID]
+// at [targetHeight], active and inactive alike. The returned validators
+// always carry their real NodeID and PublicKey — they are not collapsed under
+// [ids.EmptyNodeID] the way the standard validator set diffs do.
+//
+// The reconstruction starts from the currently persisted L1 validator set
+// for [subnetID] and walks backwards through the L1 reverse diffs from
+// [s.currentHeight] down to [targetHeight + 1]. Diffs that predate this
+// index being introduced are not present; queries against heights from
+// before that point may return inaccurate results.
+func (s *State) GetL1ValidatorsAtHeight(
+	ctx context.Context,
+	targetHeight uint64,
+	subnetID ids.ID,
+) ([]L1ValidatorMembership, error) {
+	if targetHeight > s.currentHeight {
+		return nil, fmt.Errorf(
+			"requested height %d > last accepted height %d",
+			targetHeight,
+			s.currentHeight,
+		)
+	}
+
+	// 1. Seed the result with the currently persisted L1 validator set for
+	//    the subnet.
+	current := make(map[ids.ID]L1ValidatorMembership)
+	validationIDIter := s.subnetIDNodeIDDB.NewIteratorWithPrefix(subnetID[:])
+	defer validationIDIter.Release()
+
+	for validationIDIter.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		validationID, err := ids.ToID(validationIDIter.Value())
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse validation ID: %w", err)
+		}
+
+		vdr, err := s.getPersistedL1Validator(validationID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read L1 validator %s: %w", validationID, err)
+		}
+
+		current[validationID] = L1ValidatorMembership{
+			ValidationID: validationID,
+			SubnetID:     vdr.SubnetID,
+			NodeID:       vdr.NodeID,
+			PublicKey:    bls.PublicKeyFromValidUncompressedBytes(vdr.PublicKey),
+			Weight:       vdr.Weight,
+		}
+	}
+	if err := validationIDIter.Error(); err != nil {
+		return nil, err
+	}
+
+	// 2. If the target is the current height, no reverse diffs need to be
+	//    applied.
+	if targetHeight == s.currentHeight {
+		return mapToMembershipSlice(current), nil
+	}
+
+	// 3. Walk reverse diffs from currentHeight down to targetHeight + 1.
+	//    Iteration is in increasing order of (~height), which is the same as
+	//    decreasing order of height.
+	diffIter := s.l1ValidatorDiffsBySubnetIDDB.NewIteratorWithStartAndPrefix(
+		marshalStartDiffKeyBySubnetID(subnetID, s.currentHeight),
+		subnetID[:],
+	)
+	defer diffIter.Release()
+
+	for diffIter.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		_, parsedHeight, validationID, err := unmarshalL1ValidatorDiffKey(diffIter.Key())
+		if err != nil {
+			return nil, err
+		}
+		// A diff at height H stores the membership state at H-1. Applying it
+		// moves the reconstructed set from state at H to state at H-1, so
+		// diffs with parsedHeight <= targetHeight would take us past the
+		// target and must not be applied.
+		if parsedHeight <= targetHeight {
+			break
+		}
+
+		diff, err := unmarshalL1ValidatorDiff(diffIter.Value())
+		if err != nil {
+			return nil, err
+		}
+
+		if !diff.Existed {
+			delete(current, validationID)
+			continue
+		}
+
+		current[validationID] = L1ValidatorMembership{
+			ValidationID: validationID,
+			SubnetID:     subnetID,
+			NodeID:       diff.NodeID,
+			PublicKey:    bls.PublicKeyFromValidUncompressedBytes(diff.PublicKey),
+			Weight:       diff.Weight,
+		}
+	}
+	if err := diffIter.Error(); err != nil {
+		return nil, err
+	}
+
+	return mapToMembershipSlice(current), nil
+}
+
+func mapToMembershipSlice(m map[ids.ID]L1ValidatorMembership) []L1ValidatorMembership {
+	result := make([]L1ValidatorMembership, 0, len(m))
+	for _, v := range m {
+		result = append(result, v)
+	}
+	return result
 }
 
 func (s *State) GetCurrentValidator(subnetID ids.ID, nodeID ids.NodeID) (*Staker, error) {
@@ -2703,7 +2840,9 @@ func (s *State) calculateValidatorDiffs() (map[subnetIDNodeID]*validatorDiff, er
 // writeValidatorDiffs writes the validator set diff contained by the pending
 // validator set changes to disk.
 //
-// This function must be called prior to writeCurrentStakers.
+// This function must be called prior to writeCurrentStakers and
+// writeL1Validators (both consumers of [s.l1ValidatorsDiff.modified] and the
+// persisted L1 validator state).
 func (s *State) writeValidatorDiffs(height uint64) error {
 	changes, err := s.calculateValidatorDiffs()
 	if err != nil {
@@ -2746,6 +2885,66 @@ func (s *State) writeValidatorDiffs(height uint64) error {
 			if err != nil {
 				return err
 			}
+		}
+	}
+
+	return s.writeL1ValidatorDiffs(height)
+}
+
+// writeL1ValidatorDiffs records, for each L1 validator whose set membership
+// changed at [height], the prior persisted membership state. The records
+// allow reconstructing the membership of any L1 at any historical height by
+// walking the diffs backwards from the current set.
+//
+// "Membership" means the (NodeID, PublicKey, Weight) triple — independent of
+// EndAccumulatedFee — so that an L1 validator that was active at one height
+// and inactive at another is still recoverable with its real NodeID.
+//
+// This function must be called before [writeL1Validators] overwrites the
+// persisted state.
+func (s *State) writeL1ValidatorDiffs(height uint64) error {
+	for validationID, l1Validator := range s.l1ValidatorsDiff.modified {
+		var (
+			prior        l1ValidatorDiff
+			subnetID     = l1Validator.SubnetID
+			priorWeight  uint64
+			priorExisted bool
+		)
+		switch persisted, err := s.getPersistedL1Validator(validationID); err {
+		case nil:
+			priorExisted = true
+			priorWeight = persisted.Weight
+			subnetID = persisted.SubnetID
+			prior = l1ValidatorDiff{
+				Existed:   true,
+				NodeID:    persisted.NodeID,
+				PublicKey: persisted.PublicKey,
+				Weight:    persisted.Weight,
+			}
+		case database.ErrNotFound:
+			// prior.Existed is already false
+		default:
+			return fmt.Errorf("failed to read prior L1 validator %s: %w", validationID, err)
+		}
+
+		var (
+			newExists = !l1Validator.isDeleted()
+			newWeight uint64
+		)
+		if newExists {
+			newWeight = l1Validator.Weight
+		}
+
+		// Skip writing a diff if the (existence, weight) tuple is unchanged.
+		// Other mutations such as EndAccumulatedFee or MinNonce do not affect
+		// set membership and would only bloat the index.
+		if priorExisted == newExists && priorWeight == newWeight {
+			continue
+		}
+
+		key := marshalL1ValidatorDiffKey(subnetID, height, validationID)
+		if err := s.l1ValidatorDiffsBySubnetIDDB.Put(key, marshalL1ValidatorDiff(&prior)); err != nil {
+			return err
 		}
 	}
 	return nil
