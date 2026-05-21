@@ -45,8 +45,10 @@ type metrics struct {
 	pollsAccepted metric.Averager
 	// latAccepted tracks the number of nanoseconds that a block was processing
 	// before being accepted
-	latAccepted          metric.Averager
-	consensusLatencies   prometheus.Histogram
+	latAccepted        metric.Averager
+	consensusLatencies prometheus.Histogram
+	gossipLatencies    prometheus.Histogram
+
 	buildLatencyAccepted prometheus.Gauge
 
 	blockSizeRejectedSum prometheus.Gauge
@@ -119,6 +121,11 @@ func newMetrics(
 			Help:    "times (in ns) from issuance of a block to acceptance, bucketed",
 			Buckets: prometheus.LinearBuckets(float64(time.Second), float64(time.Second), 4),
 		}),
+		gossipLatencies: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "gossip_latencies",
+			Help:    "times (in ns) from block build to issuance, bucketed",
+			Buckets: prometheus.LinearBuckets(float64(time.Millisecond)*500, float64(time.Millisecond)*500, 4),
+		}),
 		buildLatencyAccepted: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "blks_build_accept_latency",
 			Help: "time (in ns) from the timestamp of a block to the time it was accepted",
@@ -168,6 +175,7 @@ func newMetrics(
 		reg.Register(m.blockSizeAcceptedSum),
 		reg.Register(m.buildLatencyAccepted),
 		reg.Register(m.consensusLatencies),
+		reg.Register(m.gossipLatencies),
 		reg.Register(m.blockSizeRejectedSum),
 		reg.Register(m.numSuccessfulPolls),
 		reg.Register(m.numFailedPolls),
@@ -220,6 +228,10 @@ func (m *metrics) Accepted(
 	m.buildLatencyAccepted.Add(float64(builtDuration))
 	m.avgAcceptanceLatency.Observe(float64(builtDuration), now)
 	m.consensusLatencies.Observe(float64(processingDuration))
+	gossipTime := start.time.Sub(timestamp)
+	if gossipTime > 0 {
+		m.gossipLatencies.Observe(float64(gossipTime))
+	}
 }
 
 func (m *metrics) Rejected(blkID ids.ID, pollNumber uint64, blockSize int) {
