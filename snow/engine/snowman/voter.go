@@ -29,21 +29,18 @@ func (v *voter) Execute(ctx context.Context, _ []ids.ID, _ []ids.ID) error {
 	var (
 		vote       ids.ID
 		shouldVote bool
-		voteIndex  int
 	)
-	for i, voteOption := range v.responseOptions {
+	for _, voteOption := range v.responseOptions {
 		// To prevent any potential deadlocks with undisclosed dependencies,
 		// votes must be bubbled to the nearest valid block
 		vote, shouldVote = v.e.getProcessingAncestor(voteOption)
 		if shouldVote {
-			voteIndex = i
 			break
 		}
 	}
 
 	var results []bag.Bag[ids.ID]
 	if shouldVote {
-		v.e.selectedVoteIndex.Observe(float64(voteIndex))
 		results = v.e.polls.Vote(v.requestID, v.nodeID, vote)
 	} else {
 		results = v.e.polls.Drop(v.requestID, v.nodeID)
@@ -59,7 +56,8 @@ func (v *voter) Execute(ctx context.Context, _ []ids.ID, _ []ids.ID) error {
 		}
 	}
 
-	if err := v.e.VM.SetPreference(ctx, v.e.Consensus.Preference()); err != nil {
+	pref, _ := v.e.Consensus.Preference()
+	if err := v.e.VM.SetPreference(ctx, pref); err != nil {
 		return err
 	}
 
