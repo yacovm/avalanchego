@@ -1085,16 +1085,20 @@ func TestEngineBlockingChitResponse(t *testing.T) {
 
 	sender.SendPullQueryF = nil
 
-	// In response to the query for [issuedBlk], the peer is responding with,
-	// the currently pending issuance, [blockingBlk]. The direct conflict of
-	// [issuedBlk] is [missingBlk]. This registers a voter job dependent on
-	// [blockingBlk] and [missingBlk].
+	// In response to the query for [issuedBlk], the peer responds with its
+	// preference at the requested height, [blockingBlk], which is still pending
+	// issuance (it is awaiting [missingBlk], whose conflict is [issuedBlk]).
+	// The engine ignores the peer's tip preference and only acts on the block at
+	// the requested height, so this registers a voter job dependent solely on
+	// [blockingBlk]. Together with the pending issuer for [blockingBlk] (which
+	// awaits [missingBlk]) the scheduler is blocking on two distinct
+	// dependencies: [blockingBlk] and [missingBlk].
 	require.NoError(te.Chits(
 		t.Context(),
 		queryRequest.NodeID,
 		queryRequest.RequestID,
 		blockingBlk.ID(),
-		missingBlk.ID(),
+		blockingBlk.ID(),
 		blockingBlk.ID(),
 		blockingBlk.Height(),
 	))
@@ -1877,9 +1881,9 @@ func TestEngineBubbleVotesThroughInvalidBlock(t *testing.T) {
 		*reqVdr = inVdr
 	}
 
-	// Now we are expecting a Chits message, and we receive it for [blk2]
-	// instead of [blk1]. This will cause the node to again request [blk2].
-	require.NoError(te.Chits(t.Context(), vdr, *queryRequestID, blk2.ID(), blk1.ID(), blk2.ID(), blk2.Height()))
+	// Now we are expecting a Chits message. The peer's preference at the
+	// requested height is [blk2], so the engine requests [blk2].
+	require.NoError(te.Chits(t.Context(), vdr, *queryRequestID, blk2.ID(), blk2.ID(), blk2.ID(), blk2.Height()))
 
 	// The votes should be bubbled through [blk2] despite the fact that it is
 	// failing verification.
@@ -1919,7 +1923,7 @@ func TestEngineBubbleVotesThroughInvalidBlock(t *testing.T) {
 	require.True(*queried)
 
 	// After a single vote for [blk2], it should be marked as accepted.
-	require.NoError(te.Chits(t.Context(), vdr, *queryRequestID, blk2.ID(), blk1.ID(), blk2.ID(), blk2.Height()))
+	require.NoError(te.Chits(t.Context(), vdr, *queryRequestID, blk2.ID(), blk2.ID(), blk2.ID(), blk2.Height()))
 	require.Equal(snowtest.Accepted, blk2.Status)
 }
 
@@ -2135,9 +2139,10 @@ func TestEngineBuildBlockWithCachedNonVerifiedParent(t *testing.T) {
 	// This evicts [parentBlkA] from [te.nonVerifiedCache].
 	require.NoError(te.Put(t.Context(), vdr, 0, parentBlkA.BytesV))
 
-	// Give 2 chits for [parentBlkA]/[parentBlkB]
-	require.NoError(te.Chits(t.Context(), vdr, *queryRequestAID, parentBlkB.IDV, grandParentBlk.IDV, parentBlkB.IDV, parentBlkB.Height()))
-	require.NoError(te.Chits(t.Context(), vdr, *queryRequestGPID, parentBlkB.IDV, grandParentBlk.IDV, parentBlkB.IDV, parentBlkB.Height()))
+	// Give 2 chits for [parentBlkA]/[parentBlkB]. The peer's preference at the
+	// requested height is [parentBlkB], which is what the engine votes on.
+	require.NoError(te.Chits(t.Context(), vdr, *queryRequestAID, parentBlkB.IDV, parentBlkB.IDV, parentBlkB.IDV, parentBlkB.Height()))
+	require.NoError(te.Chits(t.Context(), vdr, *queryRequestGPID, parentBlkB.IDV, parentBlkB.IDV, parentBlkB.IDV, parentBlkB.Height()))
 
 	// Assert that the blocks' statuses are correct.
 	// The evicted [parentBlkA] shouldn't be changed.
@@ -2630,9 +2635,11 @@ func TestEngineVoteStallRegression(t *testing.T) {
 	require.Equal(snowtest.Rejected, rejectedChain[0].Status)
 }
 
-// When a voter is registered with multiple dependencies, the engine must not
-// execute the voter until all of the dependencies have been resolved; even if
-// one of the dependencies has been abandoned.
+// The engine only acts on the peer's preference at the requested height
+// (preferredIDAtHeight), ignoring the peer's tip preference. A voter is
+// therefore registered with at most one dependency - the block at the
+// requested height - and the poll must not be applied until that block has
+// been issued.
 func TestEngineEarlyTerminateVoterRegression(t *testing.T) {
 	require := require.New(t)
 
@@ -2719,8 +2726,10 @@ func TestEngineEarlyTerminateVoterRegression(t *testing.T) {
 		chain[:1],
 	)
 
-	// Vote for block 2 or block 1 in poll 0. This should trigger Get requests
-	// for both block 2 and block 1.
+	// Respond to poll 0 with the peer's tip preference [block 2] and its
+	// preference at the requested height [block 1]. The engine ignores the
+	// peer's tip preference and only fetches the block at the requested height,
+	// so this triggers a Get request for block 1 only - not for block 2.
 	require.NoError(engine.Chits(
 		t.Context(),
 		nodeID,
@@ -2732,19 +2741,13 @@ func TestEngineEarlyTerminateVoterRegression(t *testing.T) {
 	))
 	require.Len(pollRequestIDs, 1)
 	require.Contains(getRequestIDs, chain[1].ID())
-	require.Contains(getRequestIDs, chain[2].ID())
+	require.NotContains(getRequestIDs, chain[2].ID())
+	// The voter depends on block 1, which is still being fetched, so the poll
+	// must not be applied yet and block 0 remains undecided.
+	require.Equal(snowtest.Undecided, chain[0].Status)
 
-	// Mark the request for block 2 as failed. This should not cause the poll to
-	// be applied as there is still an outstanding request for block 1.
-	require.NoError(engine.GetFailed(
-		t.Context(),
-		nodeID,
-		getRequestIDs[chain[2].ID()],
-	))
-	require.Len(pollRequestIDs, 1)
-
-	// Issue block 1. This should cause the poll to be applied to both block 0
-	// and block 1.
+	// Issue block 1. This resolves the voter's only dependency and applies the
+	// poll to both block 0 and block 1.
 	require.NoError(engine.Put(
 		t.Context(),
 		nodeID,
@@ -2756,7 +2759,7 @@ func TestEngineEarlyTerminateVoterRegression(t *testing.T) {
 	require.Len(pollRequestIDs, 2)
 	require.Equal(snowtest.Accepted, chain[0].Status)
 	require.Equal(snowtest.Accepted, chain[1].Status)
-	// Block 2 still hasn't been issued, so it's status should remain Undecided.
+	// Block 2 was never fetched, so its status remains Undecided.
 	require.Equal(snowtest.Undecided, chain[2].Status)
 }
 

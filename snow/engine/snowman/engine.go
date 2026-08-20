@@ -377,42 +377,22 @@ func (e *Engine) Chits(ctx context.Context, nodeID ids.NodeID, requestID uint32,
 	)
 
 	issuedMetric := e.metrics.issued.WithLabelValues(pullGossipSource)
-	if err := e.issueFromByID(ctx, nodeID, preferredID, issuedMetric); err != nil {
+
+	if err := e.issueFromByID(ctx, nodeID, preferredIDAtHeight, issuedMetric); err != nil {
 		return err
 	}
 
-	var (
-		preferredIDAtHeightShouldBlock bool
-		// Invariant: The order of [responseOptions] must be [preferredID] then
-		// (optionally) [preferredIDAtHeight]. During vote application, the
-		// first vote that can be applied will be used. So, the votes should be
-		// populated in order of decreasing height.
-		responseOptions = []ids.ID{preferredID}
-	)
-	if preferredID != preferredIDAtHeight {
-		if err := e.issueFromByID(ctx, nodeID, preferredIDAtHeight, issuedMetric); err != nil {
-			return err
-		}
-		preferredIDAtHeightShouldBlock = e.canDependOn(preferredIDAtHeight)
-		responseOptions = append(responseOptions, preferredIDAtHeight)
-	}
-
-	// Will record chits once [preferredID] and [preferredIDAtHeight] have been
-	// issued into consensus
+	// Will record chits once [preferredIDAtHeight] has been issued into consensus
 	v := &voter{
 		e:               e,
 		nodeID:          nodeID,
 		requestID:       requestID,
-		responseOptions: responseOptions,
+		responseOptions: []ids.ID{preferredIDAtHeight},
 	}
 
-	// Wait until [preferredID] and [preferredIDAtHeight] have been issued to
-	// consensus before applying this chit.
+	// Wait until [preferredIDAtHeight] has been issued to consensus before applying this chit.
 	var deps []ids.ID
-	if e.canDependOn(preferredID) {
-		deps = append(deps, preferredID)
-	}
-	if preferredIDAtHeightShouldBlock {
+	if e.canDependOn(preferredIDAtHeight) {
 		deps = append(deps, preferredIDAtHeight)
 	}
 
