@@ -5,6 +5,7 @@ package enginetest
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/ava-labs/avalanchego/database"
@@ -14,6 +15,11 @@ import (
 	"github.com/ava-labs/avalanchego/snow/engine/snowman/block/blocktest"
 	"github.com/ava-labs/avalanchego/snow/snowtest"
 )
+
+// ErrParentNotAccepted is returned by a block's Verify when the VM is
+// configured with [VM.VerifyRequiresAcceptedParent] and the block's parent has
+// not been accepted yet.
+var ErrParentNotAccepted = errors.New("parent not accepted")
 
 // VM is a fake [block.ChainVM]. An in-memory chain holds its blocks. A test
 // declares which blocks a node holds.
@@ -26,6 +32,12 @@ type VM struct {
 	// Has reports if this node holds a block. If Has is nil, the node holds every
 	// block in the chain. The node always holds its last accepted block.
 	Has func(*snowmantest.Block) bool
+
+	// RequireAcceptedParentToVerify, when non-nil, gates block verification: a
+	// block for which it returns true fails Verify with [ErrParentNotAccepted]
+	// until its parent has been accepted (not merely processing). This models a
+	// VM that can only verify a block against its parent's accepted state.
+	RequireAcceptedParentToVerify func(*snowmantest.Block) bool
 
 	// LastAcceptedBlock is the block that LastAccepted returns.
 	// If LastAcceptedBlock is nil, LastAccepted reports the highest accepted block in
@@ -80,7 +92,7 @@ func (vm *VM) GetBlock(_ context.Context, blkID ids.ID) (snowman.Block, error) {
 	if !vm.has(blk) {
 		return nil, database.ErrNotFound
 	}
-	return blk, nil
+	return vm.wrap(blk), nil
 }
 
 // ParseBlock returns any block in the chain. It does this even if the node does
@@ -90,7 +102,30 @@ func (vm *VM) ParseBlock(_ context.Context, blkBytes []byte) (snowman.Block, err
 	if !ok {
 		return nil, database.ErrNotFound
 	}
-	return blk, nil
+	return vm.wrap(blk), nil
+}
+
+// wrap returns [blk] as-is, or, if the VM is configured to gate its
+// verification on parent acceptance, wrapped so that Verify enforces that.
+func (vm *VM) wrap(blk *snowmantest.Block) snowman.Block {
+	if vm.RequireAcceptedParentToVerify != nil && vm.RequireAcceptedParentToVerify(blk) {
+		return &acceptGatedBlock{Block: blk, vm: vm}
+	}
+	return blk
+}
+
+// acceptGatedBlock is a block whose Verify only succeeds once its parent has
+// been accepted, modeling a VM that verifies against accepted parent state.
+type acceptGatedBlock struct {
+	*snowmantest.Block
+	vm *VM
+}
+
+func (b *acceptGatedBlock) Verify(ctx context.Context) error {
+	if parent, ok := b.vm.byID[b.Parent()]; ok && parent.Status != snowtest.Accepted {
+		return ErrParentNotAccepted
+	}
+	return b.Block.Verify(ctx)
 }
 
 // LastAccepted reports [VM.LastAcceptedBlock]. If [VM.LastAcceptedBlock] is nil,

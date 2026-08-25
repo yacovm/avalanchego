@@ -2763,6 +2763,307 @@ func TestEngineEarlyTerminateVoterRegression(t *testing.T) {
 	require.Equal(snowtest.Undecided, chain[2].Status)
 }
 
+// TestEngineForkNearAcceptFrontierAdvancesAcceptFrontier is a liveness
+// regression test for the "only query the next preferred height" behavior.
+//
+// Since queries now advertise preferredHeight+1 (instead of
+// lastAcceptedHeight+1), and Chits only votes on the single block at the
+// requested height (no fallback to a lower, more-certainly-processing block),
+// there is a concern that a node which has built a tall processing chain on a
+// losing fork can no longer advance its accept frontier: the votes it collects
+// are for a competing fork that diverges right at the accept frontier, and
+// getProcessingAncestor drops any vote that bubbles up to an already-decided
+// ancestor.
+//
+// This test exercises exactly that scenario and asserts the node still
+// converges onto - and accepts - the peer-preferred fork.
+//
+//	         accept frontier
+//	              │
+//	Genesis ──────┤
+//	 (0)          ├── A0 ── A1 ── A2      forkA: fetched from the peer; becomes
+//	              │   (1)   (2)   (3)            the node's tall processing chain
+//	              │
+//	              └── B0 ── B1 ── B2      forkB: what the peer prefers;
+//	                  (1)   (2)   (3)            diverges from the accepted chain
+//	                                             at the accept frontier (Genesis)
+//
+// The node holds neither fork: it fetches both from the peer over the wire. It
+// first learns of forkA via a PullQuery for its tip and fetches the whole chain,
+// building a tall processing chain preferred over Genesis. Meanwhile the peer
+// keeps voting forkB.
+//
+// To make the concern as sharp as possible, forkB is verify-gated on parent
+// acceptance: B1 cannot be verified until B0 is accepted, and B2 not until B1
+// is accepted. So even though the peer's vote points the node at the forkB tip
+// (B2), the node cannot verify B2 - it can only make progress by accepting
+// forkB from the bottom up. The node must therefore reject its tall forkA and
+// climb forkB one accepted block at a time. The test asserts it does exactly
+// that and fully converges (liveness holds).
+func TestEngineForkNearAcceptFrontierAdvancesAcceptFrontier(t *testing.T) {
+	require := require.New(t)
+
+	const forkLen = 3
+	forkA := snowmantest.BuildDescendants(snowmantest.Genesis, forkLen)
+	forkB := snowmantest.BuildDescendants(snowmantest.Genesis, forkLen)
+	forkATip := forkA[forkLen-1]
+	forkBTip := forkB[forkLen-1]
+
+	nodeID := ids.GenerateTestNodeID()
+	peerID := ids.GenerateTestNodeID()
+	network := snowmanenginetest.NewNetwork(t)
+
+	// connect controls whether the engine treats [peer] as a connected validator.
+	// A node that hasn't connected its validator can still fetch blocks (Get is
+	// not quorum-gated) but its own queries abort for insufficient connected
+	// stake - which we use to fetch forkA without triggering forkB convergence.
+	newEngine := func(self, peer ids.NodeID, vm *snowmanenginetest.VM, connect bool) *Engine {
+		cfg := DefaultConfig(t) // K=1, AlphaPreference=1, AlphaConfidence=1, Beta=1
+		require.NoError(cfg.Validators.AddStaker(cfg.Ctx.SubnetID, peer, nil, ids.Empty, 1))
+		if connect {
+			require.NoError(cfg.ConnectedValidators.Connected(t.Context(), peer, version.Current))
+		}
+		cfg.Validators.RegisterSetCallbackListener(cfg.Ctx.SubnetID, cfg.ConnectedValidators)
+		cfg.VM = vm
+
+		cfg.Sender = network.CreateSender(self)
+		snowGetHandler, err := getter.New(vm, cfg.Sender, cfg.Ctx.Log, time.Second, 2000, cfg.Ctx.Registerer)
+		require.NoError(err)
+		cfg.AllGetsServer = snowGetHandler
+
+		e, err := New(cfg)
+		require.NoError(err)
+		network.Register(self, e)
+		return e
+	}
+
+	// The peer holds both forks and serves either on request. It is authoritative
+	// for forkB (it reports the forkB tip as its last accepted block and prefers
+	// it), but it also serves forkA blocks over the wire so the node can fetch
+	// them. Appending forkB last makes the peer's by-height index resolve to
+	// forkB, so every preference it reports points at forkB.
+	peerVM := snowmanenginetest.NewVM(t, append(slices.Clone(forkA), forkB...))
+	peerVM.LastAcceptedBlock = forkBTip
+
+	// The node holds neither fork locally: it must fetch every block above Genesis
+	// over the wire. It can parse either fork. forkB is verify-gated on parent
+	// acceptance, so the node can only verify a forkB block after its parent has
+	// been accepted; forkA is not gated.
+	forkBIDs := set.Set[ids.ID]{}
+	for _, blk := range forkB {
+		forkBIDs.Add(blk.ID())
+	}
+	nodeVM := snowmanenginetest.NewVM(t, append(slices.Clone(forkA), forkB...))
+	nodeVM.LastAcceptedBlock = snowmantest.Genesis
+	nodeVM.Has = func(*snowmantest.Block) bool {
+		return false
+	}
+	nodeVM.RequireAcceptedParentToVerify = func(blk *snowmantest.Block) bool {
+		return forkBIDs.Contains(blk.ID())
+	}
+
+	// The peer is a connected validator; the node's validator (the peer) is left
+	// unconnected for now, so the node fetches blocks but does not yet query for
+	// preferences.
+	peerEngine := newEngine(peerID, nodeID, peerVM, true)
+	nodeEngine := newEngine(nodeID, peerID, nodeVM, false)
+
+	require.NoError(peerEngine.Start(t.Context(), 0))
+	require.NoError(nodeEngine.Start(t.Context(), 0))
+
+	// Phase 1 - fetch forkA over the wire. The node learns of forkA through a
+	// regular PullQuery for its tip (which carries just the block ID). Since the
+	// node holds no forkA blocks, it fetches the whole chain from the peer via
+	// Get/Put, bottom-up. Its own queries abort (peer not connected yet), so it
+	// builds forkA without any forkB convergence interfering.
+	require.NoError(nodeEngine.PullQuery(t.Context(), peerID, 0, forkATip.ID(), 0))
+	require.NoError(network.DeliverMessages())
+	require.False(network.HasQueuedMessagesToDispatch())
+
+	// The node now holds all of forkA as a tall processing chain preferred over
+	// Genesis, with nothing accepted yet.
+	for i, blk := range forkA {
+		require.Truef(nodeEngine.Consensus.Processing(blk.ID()), "forkA block at height %d not processing", i+1)
+	}
+	preferenceID, preferenceHeight := nodeEngine.Consensus.Preference()
+	require.Equal(forkATip.ID(), preferenceID)
+	require.Equal(uint64(forkLen), preferenceHeight)
+	nodeLastAcceptedID, nodeLastAcceptedHeight := nodeEngine.Consensus.LastAccepted()
+	require.Equal(snowmantest.GenesisID, nodeLastAcceptedID)
+	require.Zero(nodeLastAcceptedHeight)
+
+	// The node knows nothing about forkB: with its validator unconnected it never
+	// queried the peer, so it never received forkB's IDs and never requested,
+	// cached, or issued any forkB block. Only the forkA blocks are processing.
+	require.Equal(forkLen, nodeEngine.Consensus.NumProcessing())
+	for i, blk := range forkB {
+		id := blk.ID()
+		require.Falsef(nodeEngine.Consensus.Processing(id), "forkB block at height %d unexpectedly processing", i+1)
+		_, pending := nodeEngine.pending[id]
+		require.Falsef(pending, "forkB block at height %d unexpectedly pending", i+1)
+		_, cached := nodeEngine.unverifiedBlockCache.Get(id)
+		require.Falsef(cached, "forkB block at height %d unexpectedly cached", i+1)
+		require.Falsef(nodeEngine.blkReqs.HasValue(id), "forkB block at height %d unexpectedly requested", i+1)
+	}
+
+	// Phase 2 - converge onto forkB. Connect the peer so the node can query it.
+	require.NoError(nodeEngine.ConnectedValidators.Connected(t.Context(), peerID, version.Current))
+
+	// Round 1: the node queries at preferredHeight+1, the peer answers with forkB,
+	// and the node fetches forkB. But forkB is verify-gated on parent acceptance,
+	// so only B0 (whose parent Genesis is accepted) can be verified. The vote for
+	// the forkB tip bubbles down to B0, which is accepted - rejecting the entire
+	// forkA it built.
+	//
+	// Each subsequent round: the previously accepted forkB block unblocks
+	// verification of the next one, so the accept frontier climbs by exactly one
+	// block per round until the node fully converges onto forkB. This is the
+	// "advance one block per Gossip" behavior imposed by the gating - liveness is
+	// preserved even though the node can never build a tall processing chain on
+	// forkB.
+	for height := uint64(1); height <= forkLen; height++ {
+		require.NoError(nodeEngine.Gossip(t.Context()))
+		require.NoError(network.DeliverMessages())
+		require.False(network.HasQueuedMessagesToDispatch())
+
+		_, acceptedHeight := nodeEngine.Consensus.LastAccepted()
+		require.Equal(height, acceptedHeight)
+
+		if height == 1 {
+			for i, blk := range forkA {
+				require.Equalf(snowtest.Rejected, blk.Status, "forkA block at height %d not rejected", i+1)
+			}
+		}
+	}
+
+	// The accept frontier advanced from Genesis all the way onto forkB.
+	acceptedID, acceptedHeight := nodeEngine.Consensus.LastAccepted()
+	require.Equal(forkBTip.ID(), acceptedID)
+	require.Equal(uint64(forkLen), acceptedHeight)
+	require.Zero(nodeEngine.Consensus.NumProcessing())
+	for i, blk := range forkB {
+		require.Equalf(snowtest.Accepted, blk.Status, "forkB block at height %d not accepted", i+1)
+	}
+}
+
+// TestEngineForkConvergesWithBlocksLargerThanCache is the same scenario as
+// TestEngineForkNearAcceptFrontierAdvancesAcceptFrontier, but every block is
+// made larger than the entire unverifiedBlockCache. SizedCache.put drops any
+// entry bigger than the cache (it flushes and returns without storing), so the
+// cache is permanently empty and cannot hold a single block on the bubble path.
+//
+// The node must still converge onto the gated forkB - proving that vote bubbling
+// does not depend on the byte-bounded cache. getProcessingAncestor bubbles votes
+// through the unbounded unverifiedIDToAncestor tree, which jumps straight from
+// the high vote target to the deepest processing ancestor (the frontier+1
+// block), regardless of what the cache holds.
+func TestEngineForkConvergesWithBlocksLargerThanCache(t *testing.T) {
+	require := require.New(t)
+
+	const (
+		forkLen = 2
+		// bigBlockSize is larger than nonVerifiedCacheSize (64 MiB), so every
+		// block individually overflows the cache.
+		bigBlockSize = 100 * 1024 * 1024
+	)
+	forkA := snowmantest.BuildDescendants(snowmantest.Genesis, forkLen)
+	forkB := snowmantest.BuildDescendants(snowmantest.Genesis, forkLen)
+
+	// Inflate every block past the cache size, keeping each block's bytes unique
+	// (its first bytes are its ID).
+	for _, blk := range append(slices.Clone(forkA), forkB...) {
+		big := make([]byte, bigBlockSize)
+		id := blk.ID()
+		copy(big, id[:])
+		blk.BytesV = big
+	}
+	forkATip := forkA[forkLen-1]
+	forkBTip := forkB[forkLen-1]
+
+	nodeID := ids.GenerateTestNodeID()
+	peerID := ids.GenerateTestNodeID()
+	network := snowmanenginetest.NewNetwork(t)
+
+	newEngine := func(self, peer ids.NodeID, vm *snowmanenginetest.VM, connect bool) *Engine {
+		cfg := DefaultConfig(t) // K=1, AlphaPreference=1, AlphaConfidence=1, Beta=1
+		require.NoError(cfg.Validators.AddStaker(cfg.Ctx.SubnetID, peer, nil, ids.Empty, 1))
+		if connect {
+			require.NoError(cfg.ConnectedValidators.Connected(t.Context(), peer, version.Current))
+		}
+		cfg.Validators.RegisterSetCallbackListener(cfg.Ctx.SubnetID, cfg.ConnectedValidators)
+		cfg.VM = vm
+
+		cfg.Sender = network.CreateSender(self)
+		snowGetHandler, err := getter.New(vm, cfg.Sender, cfg.Ctx.Log, time.Second, 2000, cfg.Ctx.Registerer)
+		require.NoError(err)
+		cfg.AllGetsServer = snowGetHandler
+
+		e, err := New(cfg)
+		require.NoError(err)
+		network.Register(self, e)
+		return e
+	}
+
+	peerVM := snowmanenginetest.NewVM(t, append(slices.Clone(forkA), forkB...))
+	peerVM.LastAcceptedBlock = forkBTip
+
+	forkBIDs := set.Set[ids.ID]{}
+	for _, blk := range forkB {
+		forkBIDs.Add(blk.ID())
+	}
+	nodeVM := snowmanenginetest.NewVM(t, append(slices.Clone(forkA), forkB...))
+	nodeVM.LastAcceptedBlock = snowmantest.Genesis
+	nodeVM.Has = func(*snowmantest.Block) bool {
+		return false
+	}
+	nodeVM.RequireAcceptedParentToVerify = func(blk *snowmantest.Block) bool {
+		return forkBIDs.Contains(blk.ID())
+	}
+
+	peerEngine := newEngine(peerID, nodeID, peerVM, true)
+	nodeEngine := newEngine(nodeID, peerID, nodeVM, false)
+
+	require.NoError(peerEngine.Start(t.Context(), 0))
+	require.NoError(nodeEngine.Start(t.Context(), 0))
+
+	// Phase 1 - fetch the (oversized) forkA over the wire.
+	require.NoError(nodeEngine.PullQuery(t.Context(), peerID, 0, forkATip.ID(), 0))
+	require.NoError(network.DeliverMessages())
+	require.False(network.HasQueuedMessagesToDispatch())
+
+	for i, blk := range forkA {
+		require.Truef(nodeEngine.Consensus.Processing(blk.ID()), "forkA block at height %d not processing", i+1)
+	}
+	preferenceID, preferenceHeight := nodeEngine.Consensus.Preference()
+	require.Equal(forkATip.ID(), preferenceID)
+	require.Equal(uint64(forkLen), preferenceHeight)
+
+	// The unverified cache cannot hold any block (each exceeds it), so it is empty.
+	require.Zero(nodeEngine.unverifiedBlockCache.Len())
+
+	// Phase 2 - converge onto forkB despite the useless cache.
+	require.NoError(nodeEngine.ConnectedValidators.Connected(t.Context(), peerID, version.Current))
+	for height := uint64(1); height <= forkLen; height++ {
+		require.NoError(nodeEngine.Gossip(t.Context()))
+		require.NoError(network.DeliverMessages())
+		require.False(network.HasQueuedMessagesToDispatch())
+
+		_, acceptedHeight := nodeEngine.Consensus.LastAccepted()
+		require.Equal(height, acceptedHeight)
+	}
+
+	acceptedID, acceptedHeight := nodeEngine.Consensus.LastAccepted()
+	require.Equal(forkBTip.ID(), acceptedID)
+	require.Equal(uint64(forkLen), acceptedHeight)
+	require.Zero(nodeEngine.Consensus.NumProcessing())
+	for i, blk := range forkB {
+		require.Equalf(snowtest.Accepted, blk.Status, "forkB block at height %d not accepted", i+1)
+	}
+	for i, blk := range forkA {
+		require.Equalf(snowtest.Rejected, blk.Status, "forkA block at height %d not rejected", i+1)
+	}
+}
+
 // Voting for an unissued cached block that fails verification should not
 // register any dependencies.
 //
