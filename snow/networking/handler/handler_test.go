@@ -81,6 +81,7 @@ func TestHandlerDropsTimedOutMessages(t *testing.T) {
 		peerTracker,
 		prometheus.NewRegistry(),
 		func() {},
+		false,
 	)
 	require.NoError(err)
 	handler := handlerIntf.(*handler)
@@ -194,6 +195,7 @@ func TestHandlerClosesOnError(t *testing.T) {
 		peerTracker,
 		prometheus.NewRegistry(),
 		func() {},
+		false,
 	)
 	require.NoError(err)
 	handler := handlerIntf.(*handler)
@@ -300,6 +302,7 @@ func TestHandlerDropsGossipDuringBootstrapping(t *testing.T) {
 		peerTracker,
 		prometheus.NewRegistry(),
 		func() {},
+		false,
 	)
 	require.NoError(err)
 	handler := handlerIntf.(*handler)
@@ -394,6 +397,7 @@ func TestHandlerDispatchInternal(t *testing.T) {
 		peerTracker,
 		prometheus.NewRegistry(),
 		func() {},
+		false,
 	)
 	require.NoError(err)
 
@@ -581,6 +585,7 @@ func TestDynamicEngineTypeDispatch(t *testing.T) {
 				peerTracker,
 				prometheus.NewRegistry(),
 				func() {},
+				false,
 			)
 			require.NoError(err)
 
@@ -667,6 +672,7 @@ func TestHandlerStartError(t *testing.T) {
 		peerTracker,
 		prometheus.NewRegistry(),
 		func() {},
+		false,
 	)
 	require.NoError(err)
 
@@ -696,4 +702,107 @@ func createSubscriber() (common.Subscription, chan<- common.Message) {
 	}
 
 	return subscription, messages
+}
+
+// enabledStateSyncer is a state syncer that always reports state sync as
+// enabled.
+type enabledStateSyncer struct {
+	enginetest.Engine
+}
+
+func (*enabledStateSyncer) IsEnabled(context.Context) (bool, error) {
+	return true, nil
+}
+
+func TestSkipToSnowmanSelectsConsensusGear(t *testing.T) {
+	require := require.New(t)
+
+	snowCtx := snowtest.Context(t, snowtest.CChainID)
+	ctx := snowtest.ConsensusContext(snowCtx)
+
+	resourceTracker, err := tracker.NewResourceTracker(
+		prometheus.NewRegistry(),
+		resource.NoUsage,
+		meter.ContinuousFactory{},
+		time.Second,
+	)
+	require.NoError(err)
+
+	peerTracker, err := p2p.NewPeerTracker(
+		logging.NoLog{},
+		"",
+		prometheus.NewRegistry(),
+		nil,
+		version.Current,
+	)
+	require.NoError(err)
+
+	subscription, _ := createSubscriber()
+
+	sb := subnets.New(ctx.NodeID, subnets.Config{})
+	require.True(sb.AddChain(ctx.ChainID))
+	require.False(sb.IsBootstrapped())
+
+	handlerIntf, err := New(
+		ctx,
+		&block.ChangeNotifier{},
+		subscription,
+		validators.NewManager(),
+		time.Second,
+		testThreadPoolSize,
+		resourceTracker,
+		sb,
+		commontracker.NewPeers(),
+		peerTracker,
+		prometheus.NewRegistry(),
+		func() {},
+		true,
+	)
+	require.NoError(err)
+	handler := handlerIntf.(*handler)
+
+	cleared := false
+	chainBootstrapper := &enginetest.Bootstrapper{
+		Engine: enginetest.Engine{T: t},
+		ClearF: func(context.Context) error {
+			cleared = true
+			return nil
+		},
+	}
+	chainConsensus := &enginetest.Engine{T: t}
+	dagBootstrapper := &enginetest.Bootstrapper{
+		Engine: enginetest.Engine{T: t},
+	}
+	handler.SetEngineManager(&EngineManager{
+		DAG: &Engine{
+			Bootstrapper: dagBootstrapper,
+			Consensus:    &enginetest.Engine{T: t},
+		},
+		Chain: &Engine{
+			StateSyncer:  &enabledStateSyncer{Engine: enginetest.Engine{T: t}},
+			Bootstrapper: chainBootstrapper,
+			Consensus:    chainConsensus,
+		},
+	})
+
+	// Chain engines skip both state sync and bootstrapping, even though state
+	// sync is enabled, and immediately report the chain as bootstrapped.
+	ctx.State.Set(snow.EngineState{
+		Type:  p2ppb.EngineType_ENGINE_TYPE_CHAIN,
+		State: snow.Bootstrapping,
+	})
+	gear, err := handler.selectStartingGear(t.Context())
+	require.NoError(err)
+	require.Same(chainConsensus, gear)
+	require.True(cleared)
+	require.True(sb.IsBootstrapped())
+
+	// DAG engines must still run their bootstrapper to linearize the VM.
+	ctx.State.Set(snow.EngineState{
+		Type:  p2ppb.EngineType_ENGINE_TYPE_DAG,
+		State: snow.Bootstrapping,
+	})
+	gear, err = handler.selectStartingGear(t.Context())
+	require.NoError(err)
+	require.Same(dagBootstrapper, gear)
 }

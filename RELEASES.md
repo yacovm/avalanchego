@@ -4,6 +4,7 @@
 
 ### Config
 
+- Added `skip-to-snowman` to skip state sync and bootstrapping on every chain and start consensus immediately from the locally stored last accepted block.
 - Added `api-resolve-pending-to-last-executed` for SAE named-block resolution, optionally mapping "pending" to the last-executed instead of last-accepted block.
 
 ### Metrics

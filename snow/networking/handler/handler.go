@@ -130,6 +130,10 @@ type handler struct {
 	// Tracks the peers that are currently connected to this subnet
 	peerTracker commontracker.Peers
 	p2pTracker  *p2p.PeerTracker
+
+	// If true, chain engines skip state sync and bootstrapping and start
+	// consensus immediately.
+	skipToSnowman bool
 }
 
 // Initialize this consensus handler
@@ -147,6 +151,7 @@ func New(
 	p2pTracker *p2p.PeerTracker,
 	reg prometheus.Registerer,
 	haltBootstrapping func(),
+	skipToSnowman bool,
 ) (Handler, error) {
 	h := &handler{
 		subscription:      subscription,
@@ -162,6 +167,7 @@ func New(
 		subnet:            subnet,
 		peerTracker:       peerTracker,
 		p2pTracker:        p2pTracker,
+		skipToSnowman:     skipToSnowman,
 	}
 	h.asyncMessagePool.SetLimit(threadPoolSize)
 
@@ -224,6 +230,23 @@ func (h *handler) selectStartingGear(ctx context.Context) (common.Engine, error)
 	if engines == nil {
 		return nil, errNoStartingGear
 	}
+
+	// Skipping straight to consensus is only supported for chain engines. A
+	// DAG engine's bootstrapper must still run to linearize the VM, though it
+	// performs no network requests once the network has been linearized.
+	if h.skipToSnowman && state.Type == p2ppb.EngineType_ENGINE_TYPE_CHAIN {
+		h.ctx.Log.Warn("skipping state sync and bootstrapping",
+			zap.String("reason", "skip-to-snowman is enabled"),
+		)
+
+		// The bootstrapper would normally report this chain as bootstrapped
+		// to the subnet once it finished syncing.
+		h.subnet.Bootstrapped(h.ctx.ChainID)
+
+		// drop bootstrap state from previous runs before starting consensus
+		return engines.Consensus, engines.Bootstrapper.Clear(ctx)
+	}
+
 	if engines.StateSyncer == nil {
 		return engines.Bootstrapper, nil
 	}

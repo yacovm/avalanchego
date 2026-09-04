@@ -122,6 +122,7 @@ func TestShutdown(t *testing.T) {
 		p2pTracker,
 		prometheus.NewRegistry(),
 		func() {},
+		false,
 	)
 	require.NoError(err)
 
@@ -249,6 +250,7 @@ func TestConnectedAfterShutdownErrorLogRegression(t *testing.T) {
 		p2pTracker,
 		prometheus.NewRegistry(),
 		func() {},
+		false,
 	)
 	require.NoError(err)
 
@@ -383,6 +385,7 @@ func TestShutdownTimesOut(t *testing.T) {
 		p2pTracker,
 		prometheus.NewRegistry(),
 		func() {},
+		false,
 	)
 	require.NoError(err)
 
@@ -553,6 +556,7 @@ func TestRouterTimeout(t *testing.T) {
 		p2pTracker,
 		prometheus.NewRegistry(),
 		func() {},
+		false,
 	)
 	require.NoError(err)
 
@@ -1086,6 +1090,7 @@ func TestValidatorOnlyMessageDrops(t *testing.T) {
 		p2pTracker,
 		prometheus.NewRegistry(),
 		func() {},
+		false,
 	)
 	require.NoError(err)
 
@@ -1253,6 +1258,7 @@ func TestValidatorOnlyAllowedNodeMessageDrops(t *testing.T) {
 		p2pTracker,
 		prometheus.NewRegistry(),
 		func() {},
+		false,
 	)
 	require.NoError(err)
 
@@ -1722,6 +1728,7 @@ func newChainRouterTest(t *testing.T) (*ChainRouter, *enginetest.Engine) {
 		p2pTracker,
 		prometheus.NewRegistry(),
 		func() {},
+		false,
 	)
 	require.NoError(t, err)
 

@@ -235,6 +235,10 @@ type ManagerConfig struct {
 	// containers in an ancestors message it receives.
 	BootstrapAncestorsMaxContainersReceived int
 
+	// If true, every chain skips state sync and bootstrapping and starts
+	// consensus immediately from its locally stored last accepted block.
+	SkipToSnowman bool
+
 	Upgrades upgrade.Config
 
 	// Tracks CPU/disk usage caused by each peer.
@@ -909,6 +913,7 @@ func (m *manager) createAvalancheChain(
 		peerTracker,
 		handlerReg,
 		halter.Halt,
+		m.SkipToSnowman,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("error initializing network handler: %w", err)
@@ -1022,10 +1027,21 @@ func (m *manager) createAvalancheChain(
 		avalancheBootstrapperConfig.StopVertexID = m.Upgrades.CortinaXChainStopVertexID
 	}
 
+	onLinearized := snowmanBootstrapper.Start
+	if m.SkipToSnowman {
+		// The handler only skips bootstrapping for chain engines, because the
+		// DAG bootstrapper must run to linearize the VM. Once linearized, skip
+		// the snowman bootstrapper and start consensus directly.
+		onLinearized = func(c context.Context, lastReqID uint32) error {
+			sb.Bootstrapped(ctx.ChainID)
+			return snowmanEngine.Start(c, lastReqID)
+		}
+	}
+
 	var avalancheBootstrapper common.BootstrapableEngine
 	avalancheBootstrapper, err = avbootstrap.New(
 		avalancheBootstrapperConfig,
-		snowmanBootstrapper.Start,
+		onLinearized,
 		avalancheMetrics,
 	)
 	if err != nil {
@@ -1334,6 +1350,7 @@ func (m *manager) createSnowmanChain(
 		peerTracker,
 		handlerReg,
 		halter.Halt,
+		m.SkipToSnowman,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't initialize message handler: %w", err)
@@ -1524,6 +1541,13 @@ func (m *manager) StartChainCreator(platformParams ChainParameters) error {
 	// the P-chain initializes state that the rest of the node initialization
 	// depends on.
 	m.createChain(platformParams)
+
+	if m.SkipToSnowman {
+		// Chain creation is normally unblocked by the P-chain bootstrapper
+		// once the P-chain is bootstrapped. The bootstrapper never runs when
+		// skipping to snowman, so unblock it here instead.
+		close(m.unblockChainCreatorCh)
+	}
 
 	m.Log.Info("starting chain creator")
 	m.chainCreatorExited.Add(1)

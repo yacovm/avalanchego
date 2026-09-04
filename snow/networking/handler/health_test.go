@@ -98,6 +98,7 @@ func TestHealthCheckSubnet(t *testing.T) {
 				p2pTracker,
 				prometheus.NewRegistry(),
 				func() {},
+				false,
 			)
 			require.NoError(err)
 

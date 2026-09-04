@@ -109,6 +109,10 @@ type BootstrapConfig struct {
 	// ancestors while responding to a GetAncestors message
 	BootstrapMaxTimeGetAncestors time.Duration `json:"bootstrapMaxTimeGetAncestors"`
 
+	// If true, every chain skips state sync and bootstrapping and starts
+	// consensus immediately from its locally stored last accepted block.
+	SkipToSnowman bool `json:"skipToSnowman"`
+
 	Bootstrappers []genesis.Bootstrapper `json:"bootstrappers"`
 }
 
