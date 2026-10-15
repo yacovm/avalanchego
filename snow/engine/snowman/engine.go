@@ -37,14 +37,9 @@ const (
 	// maxAllowedBlockPreferenceHeightDistanceIngestion limits how far ahead (by height) a block may be
 	// from the last preferred height before the engine stops fetching missing ancestors for it.
 	// This limits how far we can replicate blocks that we're not sure about their acceptance before we cascade abandon them.
-	maxAllowedBlockPreferenceHeightDistanceIngestion = 100
-	// maxAllowedBlockAcceptedHeightDistanceIngestion limits how far ahead (by height) a block may be
-	// from the last accepted height.
-	// This prevents us from replicating blocks that are too far ahead and therefore can be replicated later,
-	// once we've accepted more blocks.
-	maxAllowedBlockAcceptedHeightDistanceIngestion = 1000
-	nonVerifiedCacheSize                           = 64 * units.MiB
-	errInsufficientStake                           = "insufficient connected stake"
+	maxAllowedBlockPreferenceHeightDistanceIngestion = 1000
+	nonVerifiedCacheSize                             = 64 * units.MiB
+	errInsufficientStake                             = "insufficient connected stake"
 )
 
 var _ common.Engine = (*Engine)(nil)
@@ -238,10 +233,6 @@ func (e *Engine) Put(ctx context.Context, nodeID ids.NodeID, requestID uint32, b
 		return e.GetFailed(ctx, nodeID, requestID)
 	}
 
-	if e.isBlockTooFarAhead(blk, nodeID, requestID) {
-		return e.GetFailed(ctx, nodeID, requestID)
-	}
-
 	var (
 		req = common.Request{
 			NodeID:    nodeID,
@@ -288,30 +279,6 @@ func (e *Engine) Put(ctx context.Context, nodeID ids.NodeID, requestID uint32, b
 		return err
 	}
 	return e.executeDeferredWork(ctx)
-}
-
-func (e *Engine) isBlockTooFarAhead(blk snowman.Block, nodeID ids.NodeID, requestID uint32) bool {
-	_, lastAcceptedHeight := e.Consensus.LastAccepted()
-	maxAllowedBlockIngestionHeight, err := math.Add(lastAcceptedHeight, maxAllowedBlockAcceptedHeightDistanceIngestion)
-	if err != nil {
-		e.Ctx.Log.Debug("Overflow when calculating max allowed block ingestion height",
-			zap.Uint64("lastAcceptedHeight", lastAcceptedHeight), zap.Error(err))
-		return false
-	}
-
-	if blk.Height() > maxAllowedBlockIngestionHeight {
-		e.Ctx.Log.Debug("skipping block ingestion",
-			zap.String("reason", "block height too far ahead of last accepted height"),
-			zap.Stringer("nodeID", nodeID),
-			zap.Uint32("requestID", requestID),
-			zap.Stringer("blkID", blk.ID()),
-			zap.Uint64("blkHeight", blk.Height()),
-			zap.Uint64("lastAcceptedHeight", lastAcceptedHeight),
-			zap.Uint64("maxAllowedBlockIngestionHeight", maxAllowedBlockIngestionHeight),
-		)
-		return true
-	}
-	return false
 }
 
 func (e *Engine) GetFailed(ctx context.Context, nodeID ids.NodeID, requestID uint32) error {
@@ -375,10 +342,6 @@ func (e *Engine) PushQuery(ctx context.Context, nodeID ids.NodeID, requestID uin
 			)
 		}
 		return nil
-	}
-
-	if e.isBlockTooFarAhead(blk, nodeID, requestID) {
-		return e.executeDeferredWork(ctx)
 	}
 
 	if !e.shouldIssueBlock(blk) {
@@ -999,30 +962,6 @@ func (e *Engine) sendQuery(
 		return
 	}
 
-	_, lastAcceptedHeight := e.Consensus.LastAccepted()
-
-	blockIngestionLimit, blockIngestionLimitOverflowErr := math.Add(lastAcceptedHeight, maxAllowedBlockAcceptedHeightDistanceIngestion)
-	if blockIngestionLimitOverflowErr != nil {
-		e.Ctx.Log.Debug("Overflow when computing block ingestion limit",
-			zap.Stringer("blkID", blkID),
-			zap.Uint64("lastAcceptedHeight", lastAcceptedHeight),
-			zap.Error(blockIngestionLimitOverflowErr),
-		)
-		// If the addition overflowed, it means that lastAcceptedHeight is near maxuint64.
-		// In this case, we can safely query for the next height to prefer, as it is not too far ahead of our last accepted height.
-	}
-
-	heightToAskAbout := nextHeightToPrefer
-	if nextHeightToPrefer > blockIngestionLimit && blockIngestionLimitOverflowErr == nil {
-		heightToAskAbout = blockIngestionLimit
-		e.Ctx.Log.Debug("querying for block at a lower height than preferred",
-			zap.Stringer("blkID", blkID),
-			zap.Uint64("nextHeightToPrefer", nextHeightToPrefer),
-			zap.Uint64("blockIngestionLimit", blockIngestionLimit),
-			zap.Uint64("heightToAskAbout", heightToAskAbout),
-		)
-	}
-
 	vdrBag := bag.Of(vdrIDs...)
 	e.requestID++
 	if !e.polls.Add(e.requestID, vdrBag) {
@@ -1036,9 +975,9 @@ func (e *Engine) sendQuery(
 
 	vdrSet := set.Of(vdrIDs...)
 	if push {
-		e.Sender.SendPushQuery(ctx, vdrSet, e.requestID, blkBytes, heightToAskAbout)
+		e.Sender.SendPushQuery(ctx, vdrSet, e.requestID, blkBytes, nextHeightToPrefer)
 	} else {
-		e.Sender.SendPullQuery(ctx, vdrSet, e.requestID, blkID, heightToAskAbout)
+		e.Sender.SendPullQuery(ctx, vdrSet, e.requestID, blkID, nextHeightToPrefer)
 	}
 }
 
