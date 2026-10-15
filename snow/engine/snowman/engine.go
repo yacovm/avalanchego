@@ -64,7 +64,6 @@ type Engine struct {
 	common.AcceptedStateSummaryHandler
 	common.AcceptedFrontierHandler
 	common.AcceptedHandler
-	common.AncestorsHandler
 	common.AppHandler
 	common.SimplexHandler
 	validators.Connector
@@ -105,6 +104,34 @@ type Engine struct {
 	// number of times build block needs to be called once the number of
 	// processing blocks has gone below the optimal number.
 	pendingBuildBlocks int
+
+	// catchUp is the outstanding GetAncestors request sent to catch up with
+	// a peer that reported being ahead of us, if any. At most one is in
+	// flight.
+	catchUp *catchUpRequest
+	// catchUpFloor records, per peer, the lowest height the peer was able to
+	// serve ancestors down to. Catch-up requests to that peer are skipped
+	// while our preference is further below that height than one batch
+	// could bridge, so a peer that pruned or state-synced its history isn't
+	// asked for the same useless batch again and again.
+	catchUpFloor map[ids.NodeID]uint64
+}
+
+// catchUpRequest tracks one GetAncestors request sent to catch up.
+type catchUpRequest struct {
+	req common.Request
+	// top is the block the requested batch starts at.
+	top ids.ID
+	// vote is the block the chits named. Its voter waits for it to be issued
+	// or abandoned.
+	vote ids.ID
+	// resume holds the tops of the batches that were skipped while descending
+	// to a block we hold, in the order they were skipped.
+	resume []ids.ID
+	// floor is the lowest height seen from this peer so far during the
+	// descent, recorded as the peer's floor if it stops serving.
+	floor        uint64
+	issuedMetric prometheus.Counter
 }
 
 func New(config Config) (*Engine, error) {
@@ -152,7 +179,6 @@ func New(config Config) (*Engine, error) {
 		AcceptedStateSummaryHandler: common.NewNoOpAcceptedStateSummaryHandler(config.Ctx.Log),
 		AcceptedFrontierHandler:     common.NewNoOpAcceptedFrontierHandler(config.Ctx.Log),
 		AcceptedHandler:             common.NewNoOpAcceptedHandler(config.Ctx.Log),
-		AncestorsHandler:            common.NewNoOpAncestorsHandler(config.Ctx.Log),
 		SimplexHandler:              common.NewNoOpSimplexHandler(config.Ctx.Log),
 		AppHandler:                  config.VM,
 		Connector:                   config.VM,
@@ -165,6 +191,7 @@ func New(config Config) (*Engine, error) {
 		blkReqs:                     bimap.New[common.Request, ids.ID](),
 		blkReqSourceMetric:          make(map[common.Request]prometheus.Counter),
 		pullQueryBlkReqs:            set.NewSet[common.Request](0),
+		catchUpFloor:                make(map[ids.NodeID]uint64),
 	}, nil
 }
 
@@ -466,8 +493,12 @@ func (e *Engine) Chits(ctx context.Context, nodeID ids.NodeID, requestID uint32,
 
 	issuedMetric := e.metrics.issued.WithLabelValues(pullGossipSource)
 
-	if err := e.issueFromByID(ctx, nodeID, preferredIDAtHeight, issuedMetric); err != nil {
-		return err
+	// If the peer is well ahead of us, fetch the gap as one batch of
+	// ancestors rather than one block per poll.
+	if !e.tryCatchUp(ctx, nodeID, preferredIDAtHeight, acceptedID, acceptedHeight, issuedMetric) {
+		if err := e.issueFromByID(ctx, nodeID, preferredIDAtHeight, issuedMetric); err != nil {
+			return err
+		}
 	}
 
 	// Will record chits once [preferredIDAtHeight] has been issued into consensus
@@ -1426,7 +1457,219 @@ func (e *Engine) isLegitimateChild(ctx context.Context, parentID ids.ID, childHe
 // eventually either be fulfilled or abandoned.
 func (e *Engine) canDependOn(blkID ids.ID) bool {
 	_, isPending := e.pending.Get(blkID)
-	return isPending || e.blkReqs.HasValue(blkID)
+	return isPending || e.blkReqs.HasValue(blkID) || (e.catchUp != nil && e.catchUp.vote == blkID)
+}
+
+// tryCatchUp sends a GetAncestors request to [nodeID] when we don't hold
+// [votedID] and the peer reports being ahead of us. The batched reply
+// carries the gap in one round trip and is issued bottom-up, so nothing
+// waits in pending. It reports whether a request was sent.
+//
+// The batch starts at the peer's accepted block when that block is within
+// the window of heights we ingest. When our own queries are clamped to the
+// top of that window, it starts at [votedID], which is the block at the top
+// of the window, so the batch covers the window exactly. Otherwise it starts
+// at the peer's accepted block and descends in batches until it attaches.
+func (e *Engine) tryCatchUp(
+	ctx context.Context,
+	nodeID ids.NodeID,
+	votedID ids.ID,
+	acceptedID ids.ID,
+	acceptedHeight uint64,
+	issuedMetric prometheus.Counter,
+) bool {
+	if e.catchUp != nil {
+		return false
+	}
+	if _, err := e.getBlock(ctx, votedID); err == nil {
+		return false
+	}
+	_, preferredHeight := e.Consensus.Preference()
+	nextHeightToPrefer, err := math.Add(preferredHeight, 1)
+	if err != nil {
+		return false
+	}
+	if floor, ok := e.catchUpFloor[nodeID]; ok && nextHeightToPrefer < floor {
+		// The peer couldn't serve ancestors below [floor] last time, so a
+		// batch from it wouldn't reach what we hold.
+		return false
+	}
+	_, lastAcceptedHeight := e.Consensus.LastAccepted()
+	windowTop, err := math.Add(lastAcceptedHeight, maxAllowedBlockAcceptedHeightDistanceIngestion)
+	if err != nil {
+		return false
+	}
+	if nextHeightToPrefer > windowTop {
+		// Our queries ask about the top of the window, so [votedID] is
+		// there and its ancestors reach down to what we hold.
+		e.sendCatchUp(ctx, nodeID, votedID, votedID, nil, issuedMetric)
+		return true
+	}
+	if acceptedHeight <= nextHeightToPrefer {
+		return false
+	}
+	if _, err := e.getBlock(ctx, acceptedID); err == nil {
+		return false
+	}
+	e.sendCatchUp(ctx, nodeID, acceptedID, votedID, nil, issuedMetric)
+	return true
+}
+
+func (e *Engine) sendCatchUp(
+	ctx context.Context,
+	nodeID ids.NodeID,
+	top ids.ID,
+	vote ids.ID,
+	resume []ids.ID,
+	issuedMetric prometheus.Counter,
+) {
+	e.requestID++
+	e.catchUp = &catchUpRequest{
+		req:          common.Request{NodeID: nodeID, RequestID: e.requestID},
+		top:          top,
+		vote:         vote,
+		resume:       resume,
+		issuedMetric: issuedMetric,
+	}
+	e.Ctx.Log.Debug("sending GetAncestors request to catch up",
+		zap.Stringer("nodeID", nodeID),
+		zap.Uint32("requestID", e.requestID),
+		zap.Stringer("blkID", top),
+		zap.Int("skippedBatches", len(resume)),
+	)
+	e.Sender.SendGetAncestors(ctx, nodeID, e.requestID, top)
+}
+
+// Ancestors handles the reply to a catch-up request. The batch starts at the
+// requested block and descends through its ancestors. If it reaches a block
+// we hold, the batch is issued bottom-up; otherwise the batch is dropped, the
+// block it started at is remembered, and the next batch down is requested.
+func (e *Engine) Ancestors(ctx context.Context, nodeID ids.NodeID, requestID uint32, blksBytes [][]byte) error {
+	cu := e.catchUp
+	req := common.Request{NodeID: nodeID, RequestID: requestID}
+	if cu == nil || cu.req != req {
+		e.Ctx.Log.Debug("unexpected Ancestors",
+			zap.Stringer("nodeID", nodeID),
+			zap.Uint32("requestID", requestID),
+		)
+		return nil
+	}
+
+	// Keep the prefix of the batch that is a chain starting at the requested
+	// block, with heights descending by one.
+	blks := make([]snowman.Block, 0, len(blksBytes))
+	for _, blkBytes := range blksBytes {
+		blk, err := e.VM.ParseBlock(ctx, blkBytes)
+		if err != nil {
+			break
+		}
+		if len(blks) == 0 {
+			if blk.ID() != cu.top {
+				break
+			}
+		} else if prev := blks[len(blks)-1]; blk.ID() != prev.Parent() || blk.Height()+1 != prev.Height() {
+			break
+		}
+		blks = append(blks, blk)
+	}
+	if len(blks) == 0 {
+		// The peer has no ancestors to offer from here, which is expected
+		// of a peer that pruned or state-synced its history. Remember the
+		// height it stopped at so we don't ask again until we're close.
+		e.catchUpFloor[nodeID] = cu.floor
+		e.Ctx.Log.Debug("dropping Ancestors",
+			zap.String("reason", "empty batch or batch doesn't start at the requested block"),
+			zap.Stringer("nodeID", nodeID),
+			zap.Uint32("requestID", requestID),
+			zap.Uint64("floor", cu.floor),
+		)
+		return e.catchUpDone(ctx)
+	}
+
+	// Find the lowest block of the batch that attaches to a block we hold.
+	// Blocks below that are already decided and are skipped.
+	start := -1
+	for i := len(blks) - 1; i >= 0; i-- {
+		if e.canIssueChildOn(blks[i].Parent()) {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		oldest := blks[len(blks)-1]
+		// The batch doesn't reach a block we hold. If it already went below
+		// our accepted frontier without attaching, it never will.
+		if e.isDecided(oldest) {
+			e.Ctx.Log.Debug("dropping Ancestors",
+				zap.String("reason", "batch doesn't connect to our chain"),
+				zap.Stringer("nodeID", nodeID),
+				zap.Uint32("requestID", requestID),
+			)
+			return e.catchUpDone(ctx)
+		}
+		e.sendCatchUp(ctx, nodeID, oldest.Parent(), cu.vote, append(cu.resume, cu.top), cu.issuedMetric)
+		e.catchUp.floor = oldest.Height()
+		return e.executeDeferredWork(ctx)
+	}
+
+	// Issue bottom-up: each block's parent is in consensus by the time the
+	// block is issued, so the issuance happens right away. Stop at the top
+	// of the ingestion window; the rest is fetched once more is accepted.
+	reachedWindowTop := false
+	for i := start; i >= 0; i-- {
+		blk := blks[i]
+		if e.isBlockTooFarAhead(blk, nodeID, requestID) {
+			reachedWindowTop = true
+			break
+		}
+		if !e.canIssueChildOn(blk.Parent()) {
+			break
+		}
+		if !e.shouldIssueBlock(blk) {
+			continue
+		}
+		if err := e.issue(ctx, nodeID, blk, false, cu.issuedMetric); err != nil {
+			return err
+		}
+	}
+
+	if n := len(cu.resume); n > 0 && !reachedWindowTop {
+		// Climb back up through the batches skipped on the way down.
+		e.sendCatchUp(ctx, nodeID, cu.resume[n-1], cu.vote, cu.resume[:n-1], cu.issuedMetric)
+		return e.executeDeferredWork(ctx)
+	}
+	return e.catchUpDone(ctx)
+}
+
+func (e *Engine) GetAncestorsFailed(ctx context.Context, nodeID ids.NodeID, requestID uint32) error {
+	req := common.Request{NodeID: nodeID, RequestID: requestID}
+	if e.catchUp == nil || e.catchUp.req != req {
+		e.Ctx.Log.Debug("unexpected GetAncestorsFailed",
+			zap.Stringer("nodeID", nodeID),
+			zap.Uint32("requestID", requestID),
+		)
+		return nil
+	}
+	return e.catchUpDone(ctx)
+}
+
+// catchUpDone clears the catch-up state. If the block the chits named was
+// not issued by the batches, it is fetched the ordinary way, one block from
+// the peer that named it, so a failed catch-up costs nothing but the batch.
+func (e *Engine) catchUpDone(ctx context.Context) error {
+	cu := e.catchUp
+	e.catchUp = nil
+	if !e.canDependOn(cu.vote) && !e.Consensus.Processing(cu.vote) {
+		if err := e.issueFromByID(ctx, cu.req.NodeID, cu.vote, cu.issuedMetric); err != nil {
+			return err
+		}
+		if !e.canDependOn(cu.vote) && !e.Consensus.Processing(cu.vote) {
+			if err := e.blocked.Abandon(ctx, cu.vote); err != nil {
+				return err
+			}
+		}
+	}
+	return e.executeDeferredWork(ctx)
 }
 
 // canIssueChildOn reports true if it is valid for a child of parentID to be

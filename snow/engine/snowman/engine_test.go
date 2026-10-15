@@ -2948,14 +2948,14 @@ func TestEngineForkNearAcceptFrontierAdvancesAcceptFrontier(t *testing.T) {
 			// and the node fetches forkB. But the blocks of forkB can only be verified upon parent acceptance,
 			// so only B0 (whose parent Genesis is accepted) can be verified. The vote for
 			// the forkB tip has to bubble to B0 and in each round the previously accepted block unblocks the next one,
-			// so the node climbs forkB one block at a time.
+			// so the node climbs forkB at least one block per round.
 			for height := uint64(1); height <= uint64(forkLen); height++ {
 				require.NoError(nodeEngine.Gossip(t.Context()))
 				require.NoError(network.DeliverMessages())
 				require.False(network.HasQueuedMessagesToDispatch())
 
 				_, acceptedHeight := nodeEngine.Consensus.LastAccepted()
-				require.Equal(height, acceptedHeight)
+				require.GreaterOrEqual(acceptedHeight, height)
 			}
 
 			// The accept frontier advanced from Genesis all the way onto forkB.
@@ -3836,21 +3836,15 @@ func TestEngineAbandonsBlocksTooFarAhead(t *testing.T) {
 			upToDateNodeID := ids.GenerateTestNodeID()
 
 			// The up-to-date node prefers [lastBlockOfUpdatedNode] and serves every block except
-			// [missingParent], recording whenever it is asked for [missingParent]. That request
-			// is the signal that the lagging node chose to fetch rather than
-			// abandon.
+			// [missingParent]. A Get for [missingParent] is the signal that the
+			// lagging node chose to fetch the ancestry rather than abandon it.
+			// (A GetAncestors batch is served without walking into pending, so
+			// it is not what this test bounds.)
 			var parentRequested bool
 			upToDateVM := snowmanenginetest.NewVM(t, chain)
 			upToDateVM.LastAcceptedBlock = lastBlockOfUpdatedNode
-
-			// If Has() is called, it means the lagging node is asking for a block.
-			// If the block is [missingParent], we record that it was requested.
 			upToDateVM.Has = func(blk *snowmantest.Block) bool {
-				if blk.ID() == missingParent.ID() {
-					parentRequested = true
-					return false
-				}
-				return true
+				return blk.ID() != missingParent.ID()
 			}
 
 			// The lagging node holds only blocks it has already accepted, so it
@@ -3875,7 +3869,15 @@ func TestEngineAbandonsBlocksTooFarAhead(t *testing.T) {
 
 				e, err := New(cfg)
 				require.NoError(err)
-				network.Register(self, e)
+				var handler common.Handler = e
+				if self == upToDateNodeID {
+					handler = &getObserver{Handler: e, onGet: func(blkID ids.ID) {
+						if blkID == missingParent.ID() {
+							parentRequested = true
+						}
+					}}
+				}
+				network.Register(self, handler)
 				return e
 			}
 
@@ -4098,9 +4100,12 @@ func TestEngineRecoversFromIngestionCap(t *testing.T) {
 
 	// With the backlog accepted the limit has moved, so the node can resume
 	// fetching and climbs the rest of the chain.
-	require.NoError(node.Gossip(t.Context()))
-	require.NoError(network.DeliverMessages())
-
+	// Each gossip tick fetches one ingestion window as a batch and finalizes
+	// it, after which nothing is processing until the next tick.
+	for range chainLength / heightLimit {
+		require.NoError(node.Gossip(t.Context()))
+		require.NoError(network.DeliverMessages())
+	}
 	acceptedID, _ = node.Consensus.LastAccepted()
 	require.Equal(tip.ID(), acceptedID)
 }
