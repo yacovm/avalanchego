@@ -234,7 +234,7 @@ func TestEngineQuery(t *testing.T) {
 			RequestID: requestID,
 		}
 		require.Equal(parent.ID(), blockID)
-		require.Equal(parent.Height()+1, requestedHeight) // next preferred height
+		require.Equal(parent.Height()+maxAllowedBlockPreferenceHeightDistanceIngestion, requestedHeight) // preferred height plus the fetch window
 	}
 
 	vm.ParseBlockF = func(_ context.Context, b []byte) (snowman.Block, error) {
@@ -281,7 +281,7 @@ func TestEngineQuery(t *testing.T) {
 			RequestID: requestID,
 		}
 		require.Equal(child.ID(), blockID)
-		require.Equal(child.Height()+1, requestedHeight) // next preferred height
+		require.Equal(child.Height()+maxAllowedBlockPreferenceHeightDistanceIngestion, requestedHeight) // preferred height plus the fetch window
 	}
 
 	vm.ParseBlockF = func(_ context.Context, b []byte) (snowman.Block, error) {
@@ -377,7 +377,7 @@ func TestEngineMultipleQuery(t *testing.T) {
 		vdrSet := set.Of(vdr0, vdr1, vdr2)
 		require.Equal(vdrSet, inVdrs)
 		require.Equal(blk0.ID(), blkID)
-		require.Equal(blk0.Height()+1, requestedHeight) // next preferred height
+		require.Equal(blk0.Height()+maxAllowedBlockPreferenceHeightDistanceIngestion, requestedHeight) // preferred height plus the fetch window
 	}
 
 	vm.GetBlockF = func(_ context.Context, blkID ids.ID) (snowman.Block, error) {
@@ -448,7 +448,7 @@ func TestEngineMultipleQuery(t *testing.T) {
 		vdrSet := set.Of(vdr0, vdr1, vdr2)
 		require.Equal(vdrSet, inVdrs)
 		require.Equal(blk1.ID(), blkID)
-		require.Equal(blk1.Height()+1, requestedHeight) // next preferred height
+		require.Equal(blk1.Height()+maxAllowedBlockPreferenceHeightDistanceIngestion, requestedHeight) // preferred height plus the fetch window
 	}
 	require.NoError(te.Put(t.Context(), vdr0, *getRequestID, blk1.Bytes()))
 
@@ -573,7 +573,7 @@ func TestEnginePushQuery(t *testing.T) {
 		vdrSet := set.Of(vdr)
 		require.True(inVdrs.Equals(vdrSet))
 		require.Equal(blk.ID(), blkID)
-		require.Equal(blk.Height()+1, requestedHeight) // next preferred height
+		require.Equal(blk.Height()+maxAllowedBlockPreferenceHeightDistanceIngestion, requestedHeight) // preferred height plus the fetch window
 	}
 
 	require.NoError(te.PushQuery(t.Context(), vdr, 20, blk.Bytes(), 1))
@@ -703,7 +703,7 @@ func TestVoteCanceling(t *testing.T) {
 		vdrSet := set.Of(vdr0, vdr1, vdr2)
 		require.Equal(vdrSet, inVdrs)
 		require.Equal(blk.Bytes(), blkBytes)
-		require.Equal(blk.Height()+1, requestedHeight) // next preferred height
+		require.Equal(blk.Height()+maxAllowedBlockPreferenceHeightDistanceIngestion, requestedHeight) // preferred height plus the fetch window
 	}
 
 	require.NoError(te.issue(
@@ -1071,7 +1071,7 @@ func TestEngineBlockingChitResponse(t *testing.T) {
 			RequestID: requestID,
 		}
 		require.Equal(issuedBlk.ID(), blkID)
-		require.Equal(issuedBlk.Height()+1, requestedHeight) // next preferred height
+		require.Equal(issuedBlk.Height()+maxAllowedBlockPreferenceHeightDistanceIngestion, requestedHeight) // preferred height plus the fetch window
 	}
 
 	// Issuing [issuedBlk] will immediately adds [issuedBlk] to consensus, sets
@@ -1533,7 +1533,7 @@ func TestEngineDoubleChit(t *testing.T) {
 		vdrSet := set.Of(vdr0, vdr1)
 		require.Equal(vdrSet, inVdrs)
 		require.Equal(blk.ID(), blkID)
-		require.Equal(blk.Height()+1, requestedHeight) // next preferred height
+		require.Equal(blk.Height()+maxAllowedBlockPreferenceHeightDistanceIngestion, requestedHeight) // preferred height plus the fetch window
 	}
 	require.NoError(te.issue(
 		t.Context(),
@@ -1743,11 +1743,11 @@ func TestEngineNonPreferredAmplification(t *testing.T) {
 
 	sender.SendPushQueryF = func(_ context.Context, _ set.Set[ids.NodeID], _ uint32, blkBytes []byte, requestedHeight uint64) {
 		require.NotEqual(nonPreferredBlk.Bytes(), blkBytes)
-		require.Equal(preferredBlk.Height()+1, requestedHeight) // next preferred height
+		require.Equal(preferredBlk.Height()+maxAllowedBlockPreferenceHeightDistanceIngestion, requestedHeight) // preferred height plus the fetch window
 	}
 	sender.SendPullQueryF = func(_ context.Context, _ set.Set[ids.NodeID], _ uint32, blkID ids.ID, requestedHeight uint64) {
 		require.NotEqual(nonPreferredBlk.ID(), blkID)
-		require.Equal(preferredBlk.Height()+1, requestedHeight) // next preferred height
+		require.Equal(preferredBlk.Height()+maxAllowedBlockPreferenceHeightDistanceIngestion, requestedHeight) // preferred height plus the fetch window
 	}
 
 	require.NoError(te.Put(t.Context(), vdr, 0, preferredBlk.Bytes()))
@@ -1831,7 +1831,7 @@ func TestEngineBubbleVotesThroughInvalidBlock(t *testing.T) {
 		vdrSet := set.Of(vdr)
 		require.Equal(vdrSet, inVdrs)
 		require.Equal(blk1.ID(), blkID)
-		require.Equal(blk1.Height()+1, requestedHeight) // next preferred height
+		require.Equal(blk1.Height()+maxAllowedBlockPreferenceHeightDistanceIngestion, requestedHeight) // preferred height plus the fetch window
 	}
 	// This engine now handles the response to the "Get" request. This should cause [blk1] to be issued
 	// which will result in attempting to issue [blk2]. However, [blk2] should fail verification and be dropped.
@@ -1899,7 +1899,7 @@ func TestEngineBubbleVotesThroughInvalidBlock(t *testing.T) {
 		*queryRequestID = requestID
 		require.Equal(expectedVdrSet, inVdrs)
 		require.Equal(blk2.ID(), blkID)
-		require.Equal(blk2.Height()+1, requestedHeight) // next preferred height
+		require.Equal(blk2.Height()+maxAllowedBlockPreferenceHeightDistanceIngestion, requestedHeight) // preferred height plus the fetch window
 	}
 	// Expect that the Engine will send a PullQuery after receiving this Gossip message for [blk2].
 	require.NoError(te.PushQuery(t.Context(), vdr, 0, blk2.Bytes(), 0))
@@ -1989,7 +1989,7 @@ func TestEngineBubbleVotesThroughInvalidChain(t *testing.T) {
 		*queryRequestID = requestID
 		require.Equal(expectedVdrSet, inVdrs)
 		require.Equal(blk1.ID(), blkID)
-		require.Equal(blk1.Height()+1, requestedHeight) // next preferred height
+		require.Equal(blk1.Height()+maxAllowedBlockPreferenceHeightDistanceIngestion, requestedHeight) // preferred height plus the fetch window
 	}
 
 	// Answer the request, this should result in [blk1] being issued as well.
@@ -2049,7 +2049,7 @@ func TestEngineBuildBlockWithCachedNonVerifiedParent(t *testing.T) {
 	sender.SendPullQueryF = func(_ context.Context, _ set.Set[ids.NodeID], requestID uint32, blkID ids.ID, requestedHeight uint64) {
 		*queryRequestGPID = requestID
 		require.Equal(grandParentBlk.ID(), blkID)
-		require.Equal(grandParentBlk.Height()+1, requestedHeight) // next preferred height
+		require.Equal(grandParentBlk.Height()+maxAllowedBlockPreferenceHeightDistanceIngestion, requestedHeight) // preferred height plus the fetch window
 	}
 
 	// Give the engine the grandparent
@@ -2087,7 +2087,7 @@ func TestEngineBuildBlockWithCachedNonVerifiedParent(t *testing.T) {
 	sender.SendPullQueryF = func(_ context.Context, _ set.Set[ids.NodeID], requestID uint32, blkID ids.ID, requestedHeight uint64) {
 		*queryRequestAID = requestID
 		require.Equal(parentBlkA.ID(), blkID)
-		require.Equal(parentBlkA.Height()+1, requestedHeight) // next preferred height
+		require.Equal(parentBlkA.Height()+maxAllowedBlockPreferenceHeightDistanceIngestion, requestedHeight) // preferred height plus the fetch window
 	}
 	sender.CantSendPullQuery = false
 
@@ -2176,7 +2176,7 @@ func TestEngineApplyAcceptedFrontierInQueryFailed(t *testing.T) {
 		*queryRequestID = requestID
 		require.Contains(inVdrs, vdr)
 		require.Equal(blk.Bytes(), blkBytes)
-		require.Equal(blk.Height()+1, requestedHeight) // next preferred height
+		require.Equal(blk.Height()+maxAllowedBlockPreferenceHeightDistanceIngestion, requestedHeight) // preferred height plus the fetch window
 	}
 
 	require.NoError(te.issue(
@@ -2205,7 +2205,7 @@ func TestEngineApplyAcceptedFrontierInQueryFailed(t *testing.T) {
 		*queryRequestID = requestID
 		require.Contains(inVdrs, vdr)
 		require.Equal(blk.ID(), blkID)
-		require.Equal(blk.Height()+1, requestedHeight) // next preferred height
+		require.Equal(blk.Height()+maxAllowedBlockPreferenceHeightDistanceIngestion, requestedHeight) // preferred height plus the fetch window
 	}
 
 	require.NoError(te.Chits(t.Context(), vdr, *queryRequestID, blk.ID(), blk.ID(), blk.Height()))
@@ -2291,7 +2291,7 @@ func TestEngineRepollsMisconfiguredSubnet(t *testing.T) {
 		queryRequestID = requestID
 		require.Contains(inVdrs, vdr)
 		require.Equal(blk.ID(), blkID)
-		require.Equal(blk.Height()+1, requestedHeight) // next preferred height
+		require.Equal(blk.Height()+maxAllowedBlockPreferenceHeightDistanceIngestion, requestedHeight) // preferred height plus the fetch window
 		queried = true
 	}
 
@@ -3782,22 +3782,28 @@ func TestEngineAbandonsBlocksTooFarAhead(t *testing.T) {
 			laggingNodeID := ids.GenerateTestNodeID()
 			upToDateNodeID := ids.GenerateTestNodeID()
 
-			// The up-to-date node prefers [lastBlockOfUpdatedNode] and serves every block except
-			// [missingParent], recording whenever it is asked for [missingParent]. That request
-			// is the signal that the lagging node chose to fetch rather than
-			// abandon.
-			var parentRequested bool
+			// The up-to-date node has accepted [lastBlockOfUpdatedNode] and serves every
+			// block except [missingParent]. Because it can't serve [missingParent], a
+			// query for that height falls back to its last accepted block, which is
+			// how the lagging node learns about [lastBlockOfUpdatedNode].
 			upToDateVM := snowmanenginetest.NewVM(t, chain)
 			upToDateVM.LastAcceptedBlock = lastBlockOfUpdatedNode
-
-			// If Has() is called, it means the lagging node is asking for a block.
-			// If the block is [missingParent], we record that it was requested.
 			upToDateVM.Has = func(blk *snowmantest.Block) bool {
-				if blk.ID() == missingParent.ID() {
-					parentRequested = true
-					return false
+				return blk.ID() != missingParent.ID()
+			}
+
+			// A Get for [missingParent] arriving at the up-to-date node is the
+			// signal that the lagging node chose to fetch rather than abandon.
+			var parentRequested bool
+			observeGets := func(handler common.Handler) common.Handler {
+				return &getObserver{
+					Handler: handler,
+					onGet: func(blkID ids.ID) {
+						if blkID == missingParent.ID() {
+							parentRequested = true
+						}
+					},
 				}
-				return true
 			}
 
 			// The lagging node holds only blocks it has already accepted, so it
@@ -3808,7 +3814,7 @@ func TestEngineAbandonsBlocksTooFarAhead(t *testing.T) {
 				return blk.Status == snowtest.Accepted
 			}
 
-			newEngine := func(self, peer ids.NodeID, vm *snowmanenginetest.VM) *Engine {
+			newEngine := func(self, peer ids.NodeID, vm *snowmanenginetest.VM, wrap func(common.Handler) common.Handler) *Engine {
 				cfg := DefaultConfig(t)
 				require.NoError(cfg.Validators.AddStaker(cfg.Ctx.SubnetID, peer, nil, ids.Empty, 1))
 				require.NoError(cfg.ConnectedValidators.Connected(t.Context(), peer, version.Current))
@@ -3822,19 +3828,25 @@ func TestEngineAbandonsBlocksTooFarAhead(t *testing.T) {
 
 				e, err := New(cfg)
 				require.NoError(err)
-				network.Register(self, e)
+				var handler common.Handler = e
+				if wrap != nil {
+					handler = wrap(e)
+				}
+				network.Register(self, handler)
 				return e
 			}
 
-			upToDateEngine := newEngine(upToDateNodeID, laggingNodeID, upToDateVM)
-			laggingEngine := newEngine(laggingNodeID, upToDateNodeID, laggingVM)
+			upToDateEngine := newEngine(upToDateNodeID, laggingNodeID, upToDateVM, observeGets)
+			laggingEngine := newEngine(laggingNodeID, upToDateNodeID, laggingVM, nil)
 
 			require.NoError(upToDateEngine.Start(t.Context(), 0))
 			require.NoError(laggingEngine.Start(t.Context(), 0))
 
-			// The lagging node pull-queries the peer (triggered by gossip), learns about [lastBlockOfUpdatedNode], fetches
-			// it, and then either requests [missingParent] or abandons it depending on how
-			// far ahead [lastBlockOfUpdatedNode] is.
+			// The lagging node pull-queries the peer (triggered by gossip) for the
+			// block at the edge of its fetch window. The peer can't serve that
+			// height, so it answers with [lastBlockOfUpdatedNode]. The lagging
+			// node fetches it, and then either requests [missingParent] or
+			// abandons it depending on how far ahead [lastBlockOfUpdatedNode] is.
 			require.NoError(laggingEngine.Gossip(t.Context()))
 			require.NoError(network.DeliverMessages())
 			require.False(network.HasQueuedMessagesToDispatch())
@@ -4370,6 +4382,18 @@ func TestEngineRecoversFromIngestionCap(t *testing.T) {
 
 	acceptedID, _ = node.Consensus.LastAccepted()
 	require.Equal(tip.ID(), acceptedID)
+}
+
+// getObserver forwards a node's messages to the wrapped handler and reports
+// the block ID of every Get to [onGet] first.
+type getObserver struct {
+	common.Handler
+	onGet func(blkID ids.ID)
+}
+
+func (o *getObserver) Get(ctx context.Context, nodeID ids.NodeID, requestID uint32, blkID ids.ID) error {
+	o.onGet(blkID)
+	return o.Handler.Get(ctx, nodeID, requestID, blkID)
 }
 
 // queryObserver forwards a node's messages to the wrapped handler and reports

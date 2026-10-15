@@ -191,14 +191,12 @@ func (e *Engine) Gossip(ctx context.Context) error {
 		return nil
 	}
 
-	preferredID, preferredHeight := e.Consensus.Preference()
-
-	nextHeightToPrefer, err := math.Add(preferredHeight, 1)
+	preferredID, _ := e.Consensus.Preference()
+	heightToAskAbout, err := e.heightToQuery()
 	if err != nil {
 		e.Ctx.Log.Error("skipping block gossip",
 			zap.String("reason", "block height overflow"),
 			zap.Stringer("preferredID", preferredID),
-			zap.Uint64("preferredHeight", preferredHeight),
 			zap.Error(err),
 		)
 		return nil
@@ -210,9 +208,25 @@ func (e *Engine) Gossip(ctx context.Context) error {
 		set.Of(vdrID),
 		e.requestID,
 		preferredID,
-		nextHeightToPrefer,
+		heightToAskAbout,
 	)
 	return nil
+}
+
+// heightToQuery returns the height we ask peers for their preference at.
+//
+// We ask [maxAllowedBlockPreferenceHeightDistanceIngestion] above our
+// preferred height, which is the furthest block we are willing to fetch
+// ancestors down from. A peer whose preferred tip is below that height answers
+// with its tip, so under normal operation this discloses the peer's tip. A peer
+// that is further ahead answers with its block at exactly that height, which
+// bounds the ancestor walk by construction. Either way a node that is behind
+// learns about a block well ahead of its own preference and fetches the gap in
+// one walk, instead of one block per query round trip, which is what asking
+// for preferredHeight+1 would give.
+func (e *Engine) heightToQuery() (uint64, error) {
+	_, preferredHeight := e.Consensus.Preference()
+	return math.Add(preferredHeight, maxAllowedBlockPreferenceHeightDistanceIngestion)
 }
 
 func (e *Engine) Put(ctx context.Context, nodeID ids.NodeID, requestID uint32, blkBytes []byte) error {
@@ -987,13 +1001,11 @@ func (e *Engine) sendQuery(
 		return
 	}
 
-	_, preferredHeight := e.Consensus.Preference()
-	nextHeightToPrefer, err := math.Add(preferredHeight, 1)
+	nextHeightToPrefer, err := e.heightToQuery()
 	if err != nil {
 		e.Ctx.Log.Error("dropped query for block",
 			zap.String("reason", "block height overflow"),
 			zap.Stringer("blkID", blkID),
-			zap.Uint64("preferredHeight", preferredHeight),
 			zap.Error(err),
 		)
 		return
